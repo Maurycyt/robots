@@ -1,0 +1,8 @@
+make --dry-run --keep-going --print-directory
+make: Entering directory '/home/maurycyt/Documents/SiK/robots'
+g++ -c -g -std=gnu++20 -Wall -Wextra -Wconversion -Wshadow -Werror -O2 robots-client.cpp -lboost_program_options -pthread -o robots-client.o
+g++ -g -std=gnu++20 -Wall -Wextra -Wconversion -Wshadow -Werror -O2 robots-client.o -lboost_program_options -pthread -o robots-client
+g++ -c -g -std=gnu++20 -Wall -Wextra -Wconversion -Wshadow -Werror -O2 robots-server.cpp -lboost_program_options -pthread -o robots-server.o
+g++ -g -std=gnu++20 -Wall -Wextra -Wconversion -Wshadow -Werror -O2 robots-server.o -lboost_program_options -pthread -o robots-server
+make: Leaving directory '/home/maurycyt/Documents/SiK/robots'
+ 

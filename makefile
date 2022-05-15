@@ -1,21 +1,25 @@
 CXX = g++
-CXX_FLAGS = -g -std=gnu++20 -Wall -Wextra -Wconversion -Wshadow -Werror -O2 -L/usr/lib/x86_64-linux-gnu/ -lboost_program_options
+CXX_FLAGS = -g -std=gnu++20 -Wall -Wextra -Wconversion -Wshadow -Werror -O2
+LINKS = -lboost_program_options -pthread
 
-.PHONY: all, clean
+.PHONY: all, clean, format
 
 all: robots-client robots-server
 
 robots-client: robots-client.o
-	$(CXX) $(CXX_FLAGS) $< -o $@
+	$(CXX) $(CXX_FLAGS) $< $(LINKS) -o $@
 
 robots-server: robots-server.o
-	$(CXX) $(CXX_FLAGS) $< -o $@
+	$(CXX) $(CXX_FLAGS) $< $(LINKS) -o $@
 
-robots-client.o: robots-client.cpp options.h
-	$(CXX) -c $(CXX_FLAGS) $< -o $@
+robots-client.o: robots-client.cpp options.h utils.h
+	$(CXX) -c $(CXX_FLAGS) $< $(LINKS) -o $@
 
-robots-server.o: robots-server.cpp options.h
-	$(CXX) -c $(CXX_FLAGS) $< -o $@
+robots-server.o: robots-server.cpp options.h utils.h
+	$(CXX) -c $(CXX_FLAGS) $< $(LINKS) -o $@
 
 clean:
 	rm -f robots-client robots-server *.o
+
+format:
+	clang-format -i -style=file *.h *.cpp

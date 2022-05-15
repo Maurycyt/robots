@@ -1,16 +1,29 @@
-#include <iostream>
+#include <boost/asio.hpp>
 #include <boost/program_options.hpp>
+#include <iostream>
+
 #include "options.h"
+#include "utils.h"
 
-namespace po = boost::program_options;
+int main(int argc, char ** argv) {
+	boost::asio::io_context clientContext;
+	boost::asio::ip::tcp::resolver tcpResolver(clientContext);
+	boost::asio::ip::udp::resolver udpResolver(clientContext);
+	boost::asio::ip::tcp::endpoint serverEndpoint;
+	boost::asio::ip::udp::endpoint GUIEndpoint;
 
-int main(int argc, char * * argv) {
-	/* Parse the program options. */
-	const po::options_description & optionsDescription = getClientOptionsDescription();
-	po::variables_map options;
-	po::store(po::command_line_parser(argc, argv).options(optionsDescription).run(), options);
-	po::notify(options);
+	/* Parse options and resolve addresses. */
+	boost::program_options::variables_map options = parseOptions(argc, argv, getClientOptionsDescription());
 
-	std::cerr << options.count("help") << "\n";
-	std::cerr << options["display-name"].as<std::string>();
+	try {
+		auto [serverHostStr, serverPortStr] = extractHostAndPort(options["server-address"].as<std::string>());
+		serverEndpoint = *tcpResolver.resolve(serverHostStr, serverPortStr);
+		auto [GUIHostStr, GUIPortStr] = extractHostAndPort(options["gui-address"].as<std::string>());
+		GUIEndpoint = *udpResolver.resolve(GUIHostStr, GUIPortStr);
+	} catch (std::exception & e) {
+		std::cerr << "Error: " << e.what() << "\n";
+		exit(1);
+	}
+
+	std::cerr << "Server address: " << serverEndpoint << "\nGUI address: " << GUIEndpoint << "\n";
 }
