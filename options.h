@@ -38,7 +38,7 @@ const boost::program_options::options_description & getServerOptionsDescription(
 			("game-length,l", value<uint16_t>()->required(), "The length of the game in turns")
 			("server-name,n", value<std::string>()->required(), "The name of the server")
 			("port,p", value<port_t>()->required(), "The port on which the server will be listening")
-			("seed,s", value<uint32_t>()->required(), "The seed to be used during randomization")
+			("seed,s", value<uint32_t>()->default_value(0), "The seed to be used during randomization (default is 0)")
 			("size-x,x", value<uint16_t>()->required(), "The horizontal size of the board")
 			("size-y,y", value<uint16_t>()->required(), "The vertical size of the board");
 

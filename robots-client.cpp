@@ -2,8 +2,9 @@
 #include <boost/program_options.hpp>
 #include <iostream>
 
-#include "options.h"
 #include "utils.h"
+#include "options.h"
+#include "communication.h"
 
 int main(int argc, char ** argv) {
 	boost::asio::io_context clientContext;
@@ -25,5 +26,7 @@ int main(int argc, char ** argv) {
 		exit(1);
 	}
 
-	std::cerr << "Server address: " << serverEndpoint << "\nGUI address: " << GUIEndpoint << "\n";
+	std::cerr << "Server address: " << serverEndpoint
+	          << "\nGUI address: " << GUIEndpoint
+	          << "\nListening on port " << options["port"].as<port_t>() << "\n";
 }

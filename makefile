@@ -12,10 +12,10 @@ robots-client: robots-client.o
 robots-server: robots-server.o
 	$(CXX) $(CXX_FLAGS) $< $(LINKS) -o $@
 
-robots-client.o: robots-client.cpp options.h utils.h
+robots-client.o: robots-client.cpp utils.h options.h communication.h
 	$(CXX) -c $(CXX_FLAGS) $< $(LINKS) -o $@
 
-robots-server.o: robots-server.cpp options.h utils.h
+robots-server.o: robots-server.cpp utils.h options.h communication.h
 	$(CXX) -c $(CXX_FLAGS) $< $(LINKS) -o $@
 
 clean:
