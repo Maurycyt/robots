@@ -22,7 +22,7 @@ int main(int argc, char ** argv) {
 		auto [GUIHostStr, GUIPortStr] = extractHostAndPort(options["gui-address"].as<std::string>());
 		GUIEndpoint = *udpResolver.resolve(GUIHostStr, GUIPortStr);
 	} catch (std::exception & e) {
-		std::cerr << "Error: " << e.what() << "\n";
+		std::cerr << "Error: " << e.what() << "\nRun " << argv[0] << " --help for usage.\n";
 		exit(1);
 	}
 
