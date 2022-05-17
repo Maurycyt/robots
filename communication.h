@@ -5,8 +5,18 @@
 #include <concepts>
 
 /* ============================================================================================= */
-/*                                            BUFFER                                             */
+/*                                            Buffer                                             */
 /* ============================================================================================= */
+
+template<typename T>
+concept bufferIntegral =
+	std::same_as<T, uint8_t> ||
+	std::same_as<T, uint16_t> ||
+	std::same_as<T, uint32_t>;
+
+template<typename T>
+concept bufferString =
+	std::same_as<T, std::string>;
 
 /**
  * @brief A buffer wrapper which prepares data for transfer via network.
@@ -23,57 +33,52 @@ public:
 		length = 0, index = 0;
 	}
 
-	void writeString(const std::string & src) {
+	template<bufferIntegral T>
+	void write(const T & src) {
+		if constexpr (sizeof(T) == 1) {
+			*(uint8_t *)(buffer + length) = src;
+		} else if constexpr (sizeof(T) == 2) {
+			*(uint16_t *)(buffer + length) = htobe16(src);
+		} else {
+			*(uint32_t *)(buffer + length) = htobe32(src);
+		}
+		length += sizeof(T);
+	}
+
+	template<bufferString T>
+	void write(const T & src) {
 		strncpy((char *)(buffer + length), src.c_str(), src.size());
 		length += src.size();
 	}
 
-	void writeByte(uint8_t src) {
-		*(uint8_t *)(buffer + length) = src;
-		length += sizeof(src);
+	template<bufferIntegral T>
+	T read() {
+		T result;
+		if constexpr (sizeof(T) == 1) {
+			result = *(uint8_t *)(buffer + index);
+		} else if constexpr (sizeof(T) == 2) {
+			result = be16toh(*(uint16_t *)(buffer + index));
+		} else {
+			result = be32toh(*(uint32_t *)(buffer + index));
+		}
+		length += sizeof(T);
+		return result;
 	}
 
-	void writeWord(uint16_t src) {
-		*(uint16_t *)(buffer + length) = htobe16(src);
-		length += sizeof(src);
-	}
-
-	void writeDWord(uint32_t src) {
-		*(uint32_t *)(buffer + length) = htobe32(src);
-		length += sizeof(src);
-	}
-
-	std::string readString(size_t len) {
-		std::string result = std::string((char *)(buffer + index), len);
+	template<bufferString T>
+	T read(int len) {
+		T result = T((char *)(buffer + index), len);
 		index += result.size();
-		return result;
-	}
-
-	uint8_t readByte() {
-		uint8_t result = *(uint8_t *)(buffer + index);
-		index += sizeof(result);
-		return result;
-	}
-
-	uint16_t readWord() {
-		uint16_t result = be16toh(*(uint16_t *)(buffer + index));
-		index += sizeof(result);
-		return result;
-	}
-
-	uint32_t readDWord() {
-		uint32_t result = be32toh(*(uint32_t *)(buffer + index));
-		index += sizeof(result);
 		return result;
 	}
 };
 
 /* ============================================================================================= */
-/*                                    General Data classes                                       */
+/*                             General and simple Data classes                                   */
 /* ============================================================================================= */
 
 /**
- * @brief General class for internal structured data representation.
+ * @brief General class interface for structured data representation.
  */
 class Data {
 public:
@@ -84,70 +89,43 @@ public:
 	virtual ~Data() = default;
 };
 
-class DataU8 : public Data {
+/**
+ * @brief Integral leaf node for structured data representation.
+ * @tparam T Integral type of the leaf node.
+ */
+template<bufferIntegral T>
+class DataIntegral : public Data {
 public:
-	uint8_t value;
+	T value;
 
 	void parse(Buffer & buffer) override {
-		value = buffer.readByte();
+		value = buffer.read<T>();
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeByte(value);
+		buffer.write<T>(value);
 	}
 
-	bool operator<(const DataU8 & other) const {
+	bool operator<(const DataIntegral<T> & other) const {
 		return value < other.value;
 	}
 };
 
-class DataU16 : public Data {
-public:
-	uint16_t value;
-
-	void parse(Buffer & buffer) override {
-		value = buffer.readWord();
-	}
-
-	void paste(Buffer & buffer) const override {
-		buffer.writeWord(value);
-	}
-
-	bool operator<(const DataU16 & other) const {
-		return value < other.value;
-	}
-};
-
-class DataU32 : public Data {
-public:
-	uint32_t value;
-
-	void parse(Buffer & buffer) override {
-		value = buffer.readDWord();
-	}
-
-	void paste(Buffer & buffer) const override {
-		buffer.writeDWord(value);
-	}
-
-	bool operator<(const DataU32 & other) const {
-		return value < other.value;
-	}
-};
-
+/**
+ * @brief String leaf node for structured data representation.
+ */
 class DataString : public Data {
 public:
-	uint8_t length;
 	std::string data;
 
 	void parse(Buffer & buffer) override {
-		length = buffer.readByte();
-		data = buffer.readString(length);
+		uint8_t length = buffer.read<uint8_t>();
+		data = buffer.read<std::string>(length);
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeByte(length);
-		buffer.writeString(data);
+		buffer.write<uint8_t>((uint8_t)data.size());
+		buffer.write<std::string>(data);
 	}
 
 	bool operator<(const DataString & other) const {
@@ -155,37 +133,43 @@ public:
 	}
 };
 
+/**
+ * @brief Internal list node for structured data representation.
+ * @tparam T Type of the nodes contained in the list.
+ */
 template<std::derived_from<Data> T>
 class DataList : public Data {
 public:
-	uint32_t length;
 	std::vector<T> data;
 
 	void parse(Buffer & buffer) override {
-		length = buffer.readDWord();
-		data.resize(length);
-		for (T & i : data) {
+		data.resize(buffer.read<uint32_t>());
+		for (auto & i : data) {
 			i.parse(buffer);
 		}
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeDWord(length);
-		for (const T & i : data) {
+		buffer.write<uint32_t>((uint32_t)data.size());
+		for (const auto & i : data) {
 			i.paste(buffer);
 		}
 	}
 };
 
+/**
+ * @brief Internal map node for structured data representation.
+ * @tparam K Type of the key nodes contained in the map.
+ * @tparam V Type of the value nodes contained int the map.
+ */
 template<std::derived_from<Data> K, std::derived_from<Data> V>
 class DataMap : public Data {
 public:
-	uint32_t length;
 	std::map<K, V> data;
 
 	void parse(Buffer & buffer) override {
 		data.clear();
-		length = buffer.readDWord();
+		uint32_t length = buffer.read<uint32_t>();
 		for (unsigned int i = 0; i < length; i++) {
 			K key;
 			V value;
@@ -196,7 +180,7 @@ public:
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeDWord(length);
+		buffer.write<uint32_t>((uint32_t)data.size());
 		for (const auto & i : data) {
 			i.first.paste(buffer);
 			i.second.paste(buffer);
@@ -246,11 +230,11 @@ public:
 	DirectionEnum direction;
 
 	void parse(Buffer & buffer) override {
-		direction = static_cast<DirectionEnum>(buffer.readByte());
+		direction = static_cast<DirectionEnum>(buffer.read<uint8_t>());
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeByte(static_cast<uint8_t>(direction));
+		buffer.write<uint8_t>(static_cast<uint8_t>(direction));
 	}
 };
 
@@ -268,7 +252,7 @@ public:
 	DataDirection direction;
 
 	void parse(Buffer & buffer) override {
-		type = static_cast<ClientMessageEnum>(buffer.readByte());
+		type = static_cast<ClientMessageEnum>(buffer.read<uint8_t>());
 		switch(type) {
 		case ClientMessageEnum::Join:
 			name.parse(buffer);
@@ -282,7 +266,7 @@ public:
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeByte(static_cast<uint8_t>(type));
+		buffer.write<uint8_t>(static_cast<uint8_t>(type));
 		switch(type) {
 		case ClientMessageEnum::Join:
 			name.paste(buffer);
@@ -298,32 +282,33 @@ public:
 
 class DataPosition : public Data {
 public:
-	uint16_t x, y;
+	DataIntegral<uint16_t> x;
+	DataIntegral<uint16_t> y;
 
 	void parse(Buffer & buffer) override {
-		x = buffer.readWord();
-		y = buffer.readWord();
+		x.parse(buffer);
+		y.parse(buffer);
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeWord(x);
-		buffer.writeWord(y);
+		x.paste(buffer);
+		y.paste(buffer);
 	}
 };
 
 class DataBomb : public Data {
 public:
 	DataPosition position;
-	uint16_t timer;
+	DataIntegral<uint16_t> timer;
 
 	void parse(Buffer & buffer) override {
 		position.parse(buffer);
-		timer = buffer.readWord();
+		timer.parse(buffer);
 	}
 
 	void paste(Buffer & buffer) const override {
 		position.paste(buffer);
-		buffer.writeWord(timer);
+		timer.paste(buffer);
 	}
 };
 
@@ -338,16 +323,16 @@ class DataEvent : public Data {
 public:
 	EventEnum type;
 	struct {
-		uint32_t bombID;
+		DataIntegral<uint32_t> bombID;
 		DataPosition position;
 	} bombPlaced;
 	struct {
-		uint32_t bombID;
-		DataList<DataU8> playersDestroyed;
+		DataIntegral<uint32_t> bombID;
+		DataList<DataIntegral<uint8_t>> playersDestroyed;
 		DataList<DataPosition> blocksDestroyed;
 	} bombExploded;
 	struct {
-		uint8_t playerID;
+		DataIntegral<uint8_t> playerID;
 		DataPosition position;
 	} playerMoved;
 	struct {
@@ -355,19 +340,19 @@ public:
 	} blockPlaced;
 
 	void parse(Buffer & buffer) override {
-		type = static_cast<EventEnum>(buffer.readByte());
+		type = static_cast<EventEnum>(buffer.read<uint8_t>());
 		switch(type) {
 		case EventEnum::BombPlaced:
-			bombPlaced.bombID = buffer.readDWord();
+			bombPlaced.bombID.parse(buffer);
 			bombPlaced.position.parse(buffer);
 			break;
 		case EventEnum::BombExploded:
-			bombExploded.bombID = buffer.readDWord();
+			bombExploded.bombID.parse(buffer);
 			bombExploded.playersDestroyed.parse(buffer);
 			bombExploded.blocksDestroyed.parse(buffer);
 			break;
 		case EventEnum::PlayerMoved:
-			playerMoved.playerID = buffer.readByte();
+			playerMoved.playerID.parse(buffer);
 			playerMoved.position.parse(buffer);
 			break;
 		case EventEnum::BlockPlaced:
@@ -376,19 +361,19 @@ public:
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeByte(static_cast<uint8_t>(type));
+		buffer.write<uint8_t>(static_cast<uint8_t>(type));
 		switch (type) {
 			case EventEnum::BombPlaced:
-				buffer.writeDWord(bombPlaced.bombID);
+				bombPlaced.bombID.paste(buffer);
 				bombPlaced.position.paste(buffer);
 				break;
 			case EventEnum::BombExploded:
-				buffer.writeDWord(bombExploded.bombID);
+				bombExploded.bombID.paste(buffer);
 				bombExploded.playersDestroyed.paste(buffer);
 				bombExploded.blocksDestroyed.paste(buffer);
 				break;
 			case EventEnum::PlayerMoved:
-				buffer.writeByte(playerMoved.playerID);
+				playerMoved.playerID.paste(buffer);
 				playerMoved.position.paste(buffer);
 				break;
 			case EventEnum::BlockPlaced:
@@ -410,41 +395,41 @@ public:
 	ServerMessageEnum type;
 	struct {
 		DataString serverName;
-		uint8_t playerCount;
-		uint16_t sizeX;
-		uint16_t sizeY;
-		uint16_t gameLength;
-		uint16_t explosionRadius;
-		uint16_t bombTimer;
+		DataIntegral<uint8_t> playerCount;
+		DataIntegral<uint16_t> sizeX;
+		DataIntegral<uint16_t> sizeY;
+		DataIntegral<uint16_t> gameLength;
+		DataIntegral<uint16_t> explosionRadius;
+		DataIntegral<uint16_t> bombTimer;
 	} hello;
 	struct {
-		uint8_t playerID;
+		DataIntegral<uint8_t> playerID;
 		DataPlayer player;
 	} acceptedPlayer;
 	struct {
-		DataMap<DataU8, DataPlayer> players;
+		DataMap<DataIntegral<uint8_t>, DataPlayer> players;
 	} gameStarted;
 	struct {
 		DataList<DataEvent> events;
 	} turn;
 	struct {
-		DataMap<DataPlayer, DataU32> scores;
+		DataMap<DataPlayer, DataIntegral<uint32_t>> scores;
 	} gameEnded;
 
 	void parse(Buffer & buffer) override {
-		type = static_cast<ServerMessageEnum>(buffer.readByte());
+		type = static_cast<ServerMessageEnum>(buffer.read<uint8_t>());
 		switch(type) {
 		case ServerMessageEnum::Hello:
 			hello.serverName.parse(buffer);
-			hello.playerCount = buffer.readByte();
-			hello.sizeX = buffer.readWord();
-			hello.sizeY = buffer.readWord();
-			hello.gameLength = buffer.readWord();
-			hello.explosionRadius = buffer.readWord();
-			hello.bombTimer = buffer.readWord();
+			hello.playerCount.parse(buffer);
+			hello.sizeX.parse(buffer);
+			hello.sizeY.parse(buffer);
+			hello.gameLength.parse(buffer);
+			hello.explosionRadius.parse(buffer);
+			hello.bombTimer.parse(buffer);
 			break;
 		case ServerMessageEnum::AcceptedPlayer:
-			acceptedPlayer.playerID = buffer.readByte();
+			acceptedPlayer.playerID.parse(buffer);
 			acceptedPlayer.player.parse(buffer);
 			break;
 		case ServerMessageEnum::GameStarted:
@@ -460,19 +445,19 @@ public:
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.writeByte(static_cast<uint8_t>(type));
+		buffer.write<uint8_t>(static_cast<uint8_t>(type));
 		switch(type) {
 		case ServerMessageEnum::Hello:
 			hello.serverName.paste(buffer);
-			buffer.writeByte(hello.playerCount);
-			buffer.writeWord(hello.sizeX);
-			buffer.writeWord(hello.sizeY);
-			buffer.writeWord(hello.gameLength);
-			buffer.writeWord(hello.explosionRadius);
-			buffer.writeWord(hello.bombTimer);
+			hello.playerCount.paste(buffer);
+			hello.sizeX.paste(buffer);
+			hello.sizeY.paste(buffer);
+			hello.gameLength.paste(buffer);
+			hello.explosionRadius.paste(buffer);
+			hello.bombTimer.paste(buffer);
 			break;
 		case ServerMessageEnum::AcceptedPlayer:
-			buffer.writeByte(acceptedPlayer.playerID);
+			acceptedPlayer.playerID.paste(buffer);
 			acceptedPlayer.player.paste(buffer);
 			break;
 		case ServerMessageEnum::GameStarted:
