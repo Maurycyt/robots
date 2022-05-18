@@ -54,26 +54,12 @@ boost::program_options::variables_map parseOptions(int argc, char * * argv, cons
 	variables_map options;
 
 	/* Parse the arguments, check argument validity. */
-	try {
-		store(command_line_parser(argc, argv).options(optionsDescription).run(), options);
-	} catch (std::exception & e) {
-		std::cerr << "Error: " << e.what() << "\nRun " << argv[0] << " --help for usage.\n";
-		exit(1);
-	}
-
-	/* Check for help request. */
-	if (options.count("help")) {
-		std::cout << optionsDescription;
-		exit(0);
-	}
-
-	/* Finally, save the arguments, checking argument existence. */
-	try {
-		notify(options);
-	} catch (std::exception & e) {
-		std::cerr << "Error: " << e.what() << "\nRun " << argv[0] << " --help for usage.\n";
-		exit(1);
-	}
+	store(command_line_parser(argc, argv).options(optionsDescription).run(), options);
 
 	return options;
+}
+
+void notifyOptions(boost::program_options::variables_map & options) {
+	/* Finalize argument parsing, prepare argument values. */
+	boost::program_options::notify(options);
 }

@@ -3,73 +3,124 @@
 #include <boost/asio.hpp>
 #include <vector>
 #include <concepts>
+#include "exceptions.h"
 
 /* ============================================================================================= */
 /*                                            Buffer                                             */
 /* ============================================================================================= */
 
-template<typename T>
-concept bufferIntegral =
-	std::same_as<T, uint8_t> ||
-	std::same_as<T, uint16_t> ||
-	std::same_as<T, uint32_t>;
-
-template<typename T>
-concept bufferString =
-	std::same_as<T, std::string>;
-
-/**
- * @brief A buffer wrapper which prepares data for transfer via network.
+/*
+ * A buffer wrapper which prepares data for transfer via network.
  * Handles reading and writing, taking care to convert between endianness.
+ * Not instantiable, but serves as a base class for UDP and TCP buffers.
  */
 class Buffer {
+public:
+// protected:
+	size_t size;
+	char * buffer;
+	size_t left = 0, right = 0;
+
+	Buffer(const int newSize) : size(newSize) {
+		buffer = new char [size];
+	}
+
+	void clear() {
+		left = 0, right = 0;
+	}
+
+	/* Ensures that there are `bytes` bytes ready to read from the buffer. */
+	virtual size_t pull(const size_t bytes) = 0;
+
+	/* Ensures that there are `bytes` bytes ready to write into the buffer. */
+	virtual size_t push(const size_t bytes) = 0;
+
+	void writeU8(const uint8_t src) {
+		push(sizeof(src));
+		*(uint8_t *)(buffer + right) = src;
+		right += sizeof(uint8_t);
+	}
+
+	void writeU16(const uint16_t src) {
+		push(sizeof(src));
+		*(uint16_t *)(buffer + right) = htobe16(src);
+		right += sizeof(uint16_t);
+	}
+
+	void writeU32(const uint32_t src) {
+		push(sizeof(src));
+		*(uint32_t *)(buffer + right) = htobe32(src);
+		right += sizeof(uint32_t);
+	}
+
+	/*
+	 * This one is slightly complicated. While there is some part of the string left to write,
+	 * make sure that there is space to write some of its characters to the buffer.
+	 * Once the space is made, copy the memory contents, taking proper displacements into account.
+	 */
+	void writeStr(const std::string & src) {
+		const size_t length = src.size();
+		size_t written = 0;
+		while (written < length) {
+			size_t toWrite = std::min(length - written, size);
+			push(toWrite);
+			memcpy(buffer + right, src.c_str() + written, toWrite);
+			written += toWrite;
+			right += toWrite;
+		}
+	}
+
+	uint8_t readU8() {
+		pull(sizeof(uint8_t));
+		return *(uint8_t *)(buffer + (left += sizeof(uint8_t)) - sizeof(uint8_t));
+	}
+
+	uint16_t readU16() {
+		pull(sizeof(uint16_t));
+		return be16toh(*(uint16_t *)(buffer + (left += sizeof(uint16_t)) - sizeof(uint16_t)));
+	}
+
+	uint32_t readU32() {
+		pull(sizeof(uint32_t));
+		return be32toh(*(uint32_t *)(buffer + (left += sizeof(uint32_t)) - sizeof(uint32_t)));
+	}
+
+	std::string readStr(const size_t length) {
+		std::string result;
+		size_t read = 0;
+		while (read < length) {
+			size_t toRead = std::min(length - read, size);
+			pull(toRead);
+			result.append(buffer + left, toRead);
+			read += toRead;
+			left += toRead;
+		}
+		return result;
+	}
+
+	virtual ~Buffer() {
+		delete [] buffer;
+	}
+};
+
+/* Wrapper for a buffer associated with a UDP connection. */
+class UDPBuffer : Buffer {
 private:
-	const static size_t BUFFER_SIZE = 1024;
-	uint8_t buffer[BUFFER_SIZE] = {};
-	size_t length = 0, index = 0;
+	static const int UDP_BUFFER_SIZE = 65507;
+	boost::asio::ip::udp::endpoint endpoint;
 
 public:
-	void clear() {
-		length = 0, index = 0;
+	UDPBuffer(boost::asio::ip::udp::endpoint newEndpoint) :
+	Buffer(UDP_BUFFER_SIZE),
+	endpoint(newEndpoint) {
 	}
 
-	template<bufferIntegral T>
-	void write(const T & src) {
-		if constexpr (sizeof(T) == 1) {
-			*(uint8_t *)(buffer + length) = src;
-		} else if constexpr (sizeof(T) == 2) {
-			*(uint16_t *)(buffer + length) = htobe16(src);
-		} else {
-			*(uint32_t *)(buffer + length) = htobe32(src);
-		}
-		length += sizeof(T);
+	void receive() {
+
 	}
 
-	template<bufferString T>
-	void write(const T & src) {
-		strncpy((char *)(buffer + length), src.c_str(), src.size());
-		length += src.size();
-	}
+	void send() {
 
-	template<bufferIntegral T>
-	T read() {
-		T result;
-		if constexpr (sizeof(T) == 1) {
-			result = *(uint8_t *)(buffer + index);
-		} else if constexpr (sizeof(T) == 2) {
-			result = be16toh(*(uint16_t *)(buffer + index));
-		} else {
-			result = be32toh(*(uint32_t *)(buffer + index));
-		}
-		length += sizeof(T);
-		return result;
-	}
-
-	template<bufferString T>
-	T read(int len) {
-		T result = T((char *)(buffer + index), len);
-		index += result.size();
-		return result;
 	}
 };
 
@@ -77,9 +128,7 @@ public:
 /*                             General and simple Data classes                                   */
 /* ============================================================================================= */
 
-/**
- * @brief General class interface for structured data representation.
- */
+/* General class interface for structured data representation. */
 class Data {
 public:
 	virtual void parse(Buffer & buffer) = 0;
@@ -89,43 +138,71 @@ public:
 	virtual ~Data() = default;
 };
 
-/**
- * @brief Integral leaf node for structured data representation.
- * @tparam T Integral type of the leaf node.
- */
-template<bufferIntegral T>
-class DataIntegral : public Data {
+/* Integral leaf nodes for structured data representation. */
+class DataU8 : public Data {
 public:
-	T value;
+	uint8_t value;
 
 	void parse(Buffer & buffer) override {
-		value = buffer.read<T>();
+		value = buffer.readU8();
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.write<T>(value);
+		buffer.writeU8(value);
 	}
 
-	bool operator<(const DataIntegral<T> & other) const {
+	bool operator<(const DataU8 & other) const {
 		return value < other.value;
 	}
 };
 
-/**
- * @brief String leaf node for structured data representation.
- */
+class DataU16 : public Data {
+public:
+	uint16_t value;
+
+	void parse(Buffer & buffer) override {
+		value = buffer.readU16();
+	}
+
+	void paste(Buffer & buffer) const override {
+		buffer.writeU16(value);
+	}
+
+	bool operator<(const DataU16 & other) const {
+		return value < other.value;
+	}
+};
+
+class DataU32 : public Data {
+public:
+	uint32_t value;
+
+	void parse(Buffer & buffer) override {
+		value = buffer.readU32();
+	}
+
+	void paste(Buffer & buffer) const override {
+		buffer.writeU32(value);
+	}
+
+	bool operator<(const DataU32 & other) const {
+		return value < other.value;
+	}
+};
+
+/* String leaf node for structured data representation. */
 class DataString : public Data {
 public:
 	std::string data;
 
 	void parse(Buffer & buffer) override {
-		uint8_t length = buffer.read<uint8_t>();
-		data = buffer.read<std::string>(length);
+		uint8_t length = buffer.readU8();
+		data = buffer.readStr(length);
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.write<uint8_t>((uint8_t)data.size());
-		buffer.write<std::string>(data);
+		buffer.writeU8((uint8_t)data.size());
+		buffer.writeStr(data);
 	}
 
 	bool operator<(const DataString & other) const {
@@ -133,35 +210,28 @@ public:
 	}
 };
 
-/**
- * @brief Internal list node for structured data representation.
- * @tparam T Type of the nodes contained in the list.
- */
+/* Internal list node for structured data representation. */
 template<std::derived_from<Data> T>
 class DataList : public Data {
 public:
 	std::vector<T> data;
 
 	void parse(Buffer & buffer) override {
-		data.resize(buffer.read<uint32_t>());
+		data.resize(buffer.readU32());
 		for (auto & i : data) {
 			i.parse(buffer);
 		}
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.write<uint32_t>((uint32_t)data.size());
+		buffer.writeU32((uint32_t)data.size());
 		for (const auto & i : data) {
 			i.paste(buffer);
 		}
 	}
 };
 
-/**
- * @brief Internal map node for structured data representation.
- * @tparam K Type of the key nodes contained in the map.
- * @tparam V Type of the value nodes contained int the map.
- */
+/* Internal map node for structured data representation. */
 template<std::derived_from<Data> K, std::derived_from<Data> V>
 class DataMap : public Data {
 public:
@@ -169,7 +239,7 @@ public:
 
 	void parse(Buffer & buffer) override {
 		data.clear();
-		uint32_t length = buffer.read<uint32_t>();
+		uint32_t length = buffer.readU32();
 		for (unsigned int i = 0; i < length; i++) {
 			K key;
 			V value;
@@ -180,7 +250,7 @@ public:
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.write<uint32_t>((uint32_t)data.size());
+		buffer.writeU32((uint32_t)data.size());
 		for (const auto & i : data) {
 			i.first.paste(buffer);
 			i.second.paste(buffer);
@@ -230,11 +300,15 @@ public:
 	DirectionEnum direction;
 
 	void parse(Buffer & buffer) override {
-		direction = static_cast<DirectionEnum>(buffer.read<uint8_t>());
+		uint8_t enumValue = buffer.readU8();
+		if (enumValue > 3) {
+			throw badType();
+		}
+		direction = static_cast<DirectionEnum>(enumValue);
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.write<uint8_t>(static_cast<uint8_t>(direction));
+		buffer.writeU8(static_cast<uint8_t>(direction));
 	}
 };
 
@@ -252,7 +326,11 @@ public:
 	DataDirection direction;
 
 	void parse(Buffer & buffer) override {
-		type = static_cast<ClientMessageEnum>(buffer.read<uint8_t>());
+		uint8_t enumValue = buffer.readU8();
+		if (enumValue > 3) {
+			throw badType();
+		}
+		type = static_cast<ClientMessageEnum>(enumValue);
 		switch(type) {
 		case ClientMessageEnum::Join:
 			name.parse(buffer);
@@ -266,7 +344,7 @@ public:
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.write<uint8_t>(static_cast<uint8_t>(type));
+		buffer.writeU8(static_cast<uint8_t>(type));
 		switch(type) {
 		case ClientMessageEnum::Join:
 			name.paste(buffer);
@@ -282,8 +360,8 @@ public:
 
 class DataPosition : public Data {
 public:
-	DataIntegral<uint16_t> x;
-	DataIntegral<uint16_t> y;
+	DataU16 x;
+	DataU16 y;
 
 	void parse(Buffer & buffer) override {
 		x.parse(buffer);
@@ -299,7 +377,7 @@ public:
 class DataBomb : public Data {
 public:
 	DataPosition position;
-	DataIntegral<uint16_t> timer;
+	DataU16 timer;
 
 	void parse(Buffer & buffer) override {
 		position.parse(buffer);
@@ -323,16 +401,16 @@ class DataEvent : public Data {
 public:
 	EventEnum type;
 	struct {
-		DataIntegral<uint32_t> bombID;
+		DataU32 bombID;
 		DataPosition position;
 	} bombPlaced;
 	struct {
-		DataIntegral<uint32_t> bombID;
-		DataList<DataIntegral<uint8_t>> playersDestroyed;
+		DataU32 bombID;
+		DataList<DataU8> playersDestroyed;
 		DataList<DataPosition> blocksDestroyed;
 	} bombExploded;
 	struct {
-		DataIntegral<uint8_t> playerID;
+		DataU8 playerID;
 		DataPosition position;
 	} playerMoved;
 	struct {
@@ -340,7 +418,11 @@ public:
 	} blockPlaced;
 
 	void parse(Buffer & buffer) override {
-		type = static_cast<EventEnum>(buffer.read<uint8_t>());
+		uint8_t enumValue = buffer.readU8();
+		if (enumValue > 3) {
+			throw badType();
+		}
+		type = static_cast<EventEnum>(enumValue);
 		switch(type) {
 		case EventEnum::BombPlaced:
 			bombPlaced.bombID.parse(buffer);
@@ -361,7 +443,7 @@ public:
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.write<uint8_t>(static_cast<uint8_t>(type));
+		buffer.writeU8(static_cast<uint8_t>(type));
 		switch (type) {
 			case EventEnum::BombPlaced:
 				bombPlaced.bombID.paste(buffer);
@@ -395,29 +477,33 @@ public:
 	ServerMessageEnum type;
 	struct {
 		DataString serverName;
-		DataIntegral<uint8_t> playerCount;
-		DataIntegral<uint16_t> sizeX;
-		DataIntegral<uint16_t> sizeY;
-		DataIntegral<uint16_t> gameLength;
-		DataIntegral<uint16_t> explosionRadius;
-		DataIntegral<uint16_t> bombTimer;
+		DataU8 playerCount;
+		DataU16 sizeX;
+		DataU16 sizeY;
+		DataU16 gameLength;
+		DataU16 explosionRadius;
+		DataU16 bombTimer;
 	} hello;
 	struct {
-		DataIntegral<uint8_t> playerID;
+		DataU16 playerID;
 		DataPlayer player;
 	} acceptedPlayer;
 	struct {
-		DataMap<DataIntegral<uint8_t>, DataPlayer> players;
+		DataMap<DataU8, DataPlayer> players;
 	} gameStarted;
 	struct {
 		DataList<DataEvent> events;
 	} turn;
 	struct {
-		DataMap<DataPlayer, DataIntegral<uint32_t>> scores;
+		DataMap<DataPlayer, DataU32> scores;
 	} gameEnded;
 
 	void parse(Buffer & buffer) override {
-		type = static_cast<ServerMessageEnum>(buffer.read<uint8_t>());
+		uint8_t enumValue = buffer.readU8();
+		if (enumValue > 4) {
+			throw badType();
+		}
+		type = static_cast<ServerMessageEnum>(enumValue);
 		switch(type) {
 		case ServerMessageEnum::Hello:
 			hello.serverName.parse(buffer);
@@ -445,7 +531,7 @@ public:
 	}
 
 	void paste(Buffer & buffer) const override {
-		buffer.write<uint8_t>(static_cast<uint8_t>(type));
+		buffer.writeU8(static_cast<uint8_t>(type));
 		switch(type) {
 		case ServerMessageEnum::Hello:
 			hello.serverName.paste(buffer);
