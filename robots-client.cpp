@@ -36,11 +36,23 @@ namespace {
 			throw std::string("Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) + " --help for usage.\n");
 		}
 	}
+
+	void resolveAddresses(char * * argv) {
+		try {
+		auto [serverHostStr, serverPortStr] = extractHostAndPort(options["server-address"].as<std::string>());
+		serverEndpoint = *tcpResolver.resolve(serverHostStr, serverPortStr);
+		auto [GUIHostStr, GUIPortStr] = extractHostAndPort(options["gui-address"].as<std::string>());
+		GUIEndpoint = *udpResolver.resolve(GUIHostStr, GUIPortStr);
+		} catch (std::exception & e) {
+			throw std::string("Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) + " --help for usage.\n");
+		}
+	}
 } // anonymous namespace
 
 int main(int argc, char ** argv) {
 	try {
 		handleOptions(argc, argv);
+		resolveAddresses(argv);
 	} catch (int & e) {
 		return e;
 	} catch (std::string & e) {
@@ -51,18 +63,22 @@ int main(int argc, char ** argv) {
 		return 1;
 	}
 
-	/* Resolve addresses. */
-	try {
-		auto [serverHostStr, serverPortStr] = extractHostAndPort(options["server-address"].as<std::string>());
-		serverEndpoint = *tcpResolver.resolve(serverHostStr, serverPortStr);
-		auto [GUIHostStr, GUIPortStr] = extractHostAndPort(options["gui-address"].as<std::string>());
-		GUIEndpoint = *udpResolver.resolve(GUIHostStr, GUIPortStr);
-	} catch (std::exception & e) {
-		std::cerr << "Error: " << e.what() << "\nRun " << argv[0] << " --help for usage.\n";
-		return 1;
-	}
-
 	std::cerr << "Server address: " << serverEndpoint
 	          << "\nGUI address: " << GUIEndpoint
 	          << "\nListening on port " << options["port"].as<port_t>() << "\n";
+
+	boost::asio::ip::udp::socket UDPsocket(
+		clientContext,
+		boost::asio::ip::udp::endpoint(
+			boost::asio::ip::udp::v6(), options["port"].as<port_t>()
+		)
+	);
+
+	UDPBuffer buffer(UDPsocket);
+
+	buffer.receive();
+
+	DataDirection direction;
+	direction.parse(buffer);
+	std::cout << int(static_cast<uint8_t>(direction.direction)) << "\n";
 }

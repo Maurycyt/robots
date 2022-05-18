@@ -15,8 +15,7 @@
  * Not instantiable, but serves as a base class for UDP and TCP buffers.
  */
 class Buffer {
-public:
-// protected:
+protected:
 	size_t size;
 	char * buffer;
 	size_t left = 0, right = 0;
@@ -30,11 +29,12 @@ public:
 	}
 
 	/* Ensures that there are `bytes` bytes ready to read from the buffer. */
-	virtual size_t pull(const size_t bytes) = 0;
+	virtual void pull(const size_t bytes) = 0;
 
 	/* Ensures that there are `bytes` bytes ready to write into the buffer. */
-	virtual size_t push(const size_t bytes) = 0;
+	virtual void push(const size_t bytes) = 0;
 
+public:
 	void writeU8(const uint8_t src) {
 		push(sizeof(src));
 		*(uint8_t *)(buffer + right) = src;
@@ -85,6 +85,7 @@ public:
 		return be32toh(*(uint32_t *)(buffer + (left += sizeof(uint32_t)) - sizeof(uint32_t)));
 	}
 
+	/* Slightly complicated, same as above. */
 	std::string readStr(const size_t length) {
 		std::string result;
 		size_t read = 0;
@@ -104,14 +105,50 @@ public:
 };
 
 /* Wrapper for a buffer associated with a UDP connection. */
-class UDPBuffer : Buffer {
+class UDPBuffer : public Buffer {
 private:
 	static const int UDP_BUFFER_SIZE = 65507;
+	boost::asio::ip::udp::socket & socket;
 	boost::asio::ip::udp::endpoint endpoint;
 
 public:
-	UDPBuffer(boost::asio::ip::udp::endpoint newEndpoint) :
+	UDPBuffer(boost::asio::ip::udp::socket & newSocket) :
 	Buffer(UDP_BUFFER_SIZE),
+	socket(newSocket) {
+	}
+
+	void receive() {
+		clear();
+		right = socket.receive_from(boost::asio::buffer(buffer, size), endpoint);
+		std::cerr << "Received from " << endpoint << "\n";
+	}
+
+	void send() {
+		socket.send_to(boost::asio::buffer(buffer, right), endpoint);
+	}
+
+	void push(const size_t bytes) override {
+		if (size - right < bytes) {
+			throw badWrite();
+		}
+	}
+
+	void pull(const size_t bytes) override {
+		if (right - left < bytes) {
+			throw badRead();
+		}
+	}
+};
+
+/* Wrapper for a buffer associated with a TCP connection. */
+class TCPBuffer : public Buffer {
+private:
+	static const int TCP_BUFFER_SIZE = 2048;
+	boost::asio::ip::tcp::endpoint endpoint;
+
+public:
+	TCPBuffer(boost::asio::ip::tcp::endpoint newEndpoint) :
+	Buffer(TCP_BUFFER_SIZE),
 	endpoint(newEndpoint) {
 	}
 
@@ -122,6 +159,14 @@ public:
 	void send() {
 
 	}
+
+	// void push(const size_t bytes) override {
+
+	// }
+
+	// void pull(const size_t bytes) override {
+
+	// }
 };
 
 /* ============================================================================================= */

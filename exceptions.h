@@ -15,3 +15,10 @@ class badWrite : public std::exception {
 		return "not enough buffer space to write to.";
 	}
 };
+
+/* Exception thrown when writing exceeds buffer capacity. */
+class badRead : public std::exception {
+	const char * what() const noexcept override {
+		return "not enough buffered data to read from.";
+	}
+};
