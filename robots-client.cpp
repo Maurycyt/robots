@@ -67,18 +67,31 @@ int main(int argc, char ** argv) {
 	          << "\nGUI address: " << GUIEndpoint
 	          << "\nListening on port " << options["port"].as<port_t>() << "\n";
 
-	boost::asio::ip::udp::socket UDPsocket(
+	// boost::asio::ip::udp::socket UDPsocket(
+	// 	clientContext,
+	// 	boost::asio::ip::udp::endpoint(
+	// 		boost::asio::ip::udp::v6(), options["port"].as<port_t>()
+	// 	)
+	// );
+
+	// UDPBuffer buffer(UDPsocket);
+
+	// buffer.receive();
+
+	boost::asio::ip::tcp::acceptor TCPacceptor(
 		clientContext,
-		boost::asio::ip::udp::endpoint(
-			boost::asio::ip::udp::v6(), options["port"].as<port_t>()
+		boost::asio::ip::tcp::endpoint(
+			boost::asio::ip::tcp::v6(), options["port"].as<port_t>()
 		)
 	);
 
-	UDPBuffer buffer(UDPsocket);
+	boost::asio::ip::tcp::socket TCPsocket = TCPacceptor.accept();
 
-	buffer.receive();
+	TCPBuffer buffer(TCPsocket);
 
-	DataDirection direction;
-	direction.parse(buffer);
-	std::cout << int(static_cast<uint8_t>(direction.direction)) << "\n";
+	DataClientMessage message;
+	message.parse(buffer);
+
+	std::cerr << static_cast<int>(message.type) << "\n" << message.name.data.size() << "\n"
+	          << message.name.data << "\n";
 }

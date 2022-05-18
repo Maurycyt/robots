@@ -54,9 +54,9 @@ public:
 	}
 
 	/*
-	 * This one is slightly complicated. While there is some part of the string left to write,
-	 * make sure that there is space to write some of its characters to the buffer.
-	 * Once the space is made, copy the memory contents, taking proper displacements into account.
+	 * While there is some part of the string left to write, make sure that there
+	 * is space to write some of its characters to the buffer. Once the space is
+	 * made, copy the memory contents, taking proper displacements into account.
 	 */
 	void writeStr(const std::string & src) {
 		const size_t length = src.size();
@@ -85,7 +85,7 @@ public:
 		return be32toh(*(uint32_t *)(buffer + (left += sizeof(uint32_t)) - sizeof(uint32_t)));
 	}
 
-	/* Slightly complicated, same as above. */
+	/* Similar strategy to writeStr. */
 	std::string readStr(const size_t length) {
 		std::string result;
 		size_t read = 0;
@@ -127,15 +127,15 @@ public:
 		socket.send_to(boost::asio::buffer(buffer, right), endpoint);
 	}
 
-	void push(const size_t bytes) override {
-		if (size - right < bytes) {
-			throw badWrite();
-		}
-	}
-
 	void pull(const size_t bytes) override {
 		if (right - left < bytes) {
 			throw badRead();
+		}
+	}
+
+	void push(const size_t bytes) override {
+		if (size - right < bytes) {
+			throw badWrite();
 		}
 	}
 };
@@ -144,29 +144,62 @@ public:
 class TCPBuffer : public Buffer {
 private:
 	static const int TCP_BUFFER_SIZE = 2048;
-	boost::asio::ip::tcp::endpoint endpoint;
+	boost::asio::ip::tcp::socket & socket;
+	boost::system::error_code error;
 
 public:
-	TCPBuffer(boost::asio::ip::tcp::endpoint newEndpoint) :
+	TCPBuffer(boost::asio::ip::tcp::socket & newSocket) :
 	Buffer(TCP_BUFFER_SIZE),
-	endpoint(newEndpoint) {
+	socket(newSocket) {
 	}
 
-	void receive() {
-
+	void receive(size_t bytes) {
+		std::cerr << "Receiving " << bytes << " bytes...\n";
+		boost::asio::read(
+			socket,
+			boost::asio::buffer(buffer + right, bytes),
+			error
+		);
+		if (error == boost::asio::error::eof) {
+			throw badRead();  // Connection closed cleanly by peer, although unrightfully.
+		} else if (error) {
+			throw boost::system::system_error(error); // Other error.
+		}
+		right += bytes;
 	}
 
 	void send() {
-
+		std::cerr << "Sending " << (right - left) << " bytes...\n";
+		boost::asio::write(
+			socket,
+			boost::asio::buffer(buffer + left, right - left)
+		);
+		clear();
 	}
 
-	// void push(const size_t bytes) override {
+	/*
+	 * Guarantess that there are at least `bytes` bytes to read by
+	 * either receiving enough to fulfill that need or by first copying
+	 * the received-but-not-read bytes to the beginning and then receiving.
+	 */
+	void pull(const size_t bytes) override {
+		if (left + bytes > size) {
+			memmove(buffer, buffer + left, right - left);
+			right -= left;
+			left = 0;
+			std::cerr << "Shifting to allow reading " << bytes << " bytes.\n";
+		}
+		if (right - left < bytes) {
+			receive(bytes - (right - left));
+		}
+	}
 
-	// }
-
-	// void pull(const size_t bytes) override {
-
-	// }
+	void push(const size_t bytes) override {
+		if (right + bytes > size) {
+			std::cerr << "Pushing to accomodate " << bytes << " bytes.\n";
+			send();
+		}
+	}
 };
 
 /* ============================================================================================= */
@@ -304,7 +337,7 @@ public:
 };
 
 /* ============================================================================================= */
-/*                            Message-specific Data classes                                      */
+/*                                    Specific Data classes                                      */
 /* ============================================================================================= */
 
 class DataPlayer : public Data {
@@ -354,52 +387,6 @@ public:
 
 	void paste(Buffer & buffer) const override {
 		buffer.writeU8(static_cast<uint8_t>(direction));
-	}
-};
-
-enum class ClientMessageEnum : uint8_t {
-	Join = 0,
-	PlaceBomb = 1,
-	PlaceBlock = 2,
-	Move = 3
-};
-
-class DataClientMessage : public Data {
-public:
-	ClientMessageEnum type;
-	DataString name;
-	DataDirection direction;
-
-	void parse(Buffer & buffer) override {
-		uint8_t enumValue = buffer.readU8();
-		if (enumValue > 3) {
-			throw badType();
-		}
-		type = static_cast<ClientMessageEnum>(enumValue);
-		switch(type) {
-		case ClientMessageEnum::Join:
-			name.parse(buffer);
-			break;
-		case ClientMessageEnum::Move:
-			direction.parse(buffer);
-			break;
-		default:
-			break;
-		}
-	}
-
-	void paste(Buffer & buffer) const override {
-		buffer.writeU8(static_cast<uint8_t>(type));
-		switch(type) {
-		case ClientMessageEnum::Join:
-			name.paste(buffer);
-			break;
-		case ClientMessageEnum::Move:
-			direction.paste(buffer);
-			break;
-		default:
-			break;
-		}
 	}
 };
 
@@ -509,6 +496,64 @@ public:
 	}
 };
 
+/* ============================================================================================= */
+/*                                    Sendable Data classes                                      */
+/* ============================================================================================= */
+/* 
+ * These are the four message types mentioned in the project statement.
+ * They automatically send themselves after successful pasting.
+ */
+
+/* ============================================================================================= */
+/*                                    Client-Server messages                                     */
+/* ============================================================================================= */
+
+enum class ClientMessageEnum : uint8_t {
+	Join = 0,
+	PlaceBomb = 1,
+	PlaceBlock = 2,
+	Move = 3
+};
+
+class DataClientMessage : public Data {
+public:
+	ClientMessageEnum type;
+	DataString name;
+	DataDirection direction;
+
+	void parse(Buffer & buffer) override {
+		uint8_t enumValue = buffer.readU8();
+		if (enumValue > 3) {
+			throw badType();
+		}
+		type = static_cast<ClientMessageEnum>(enumValue);
+		switch(type) {
+		case ClientMessageEnum::Join:
+			name.parse(buffer);
+			break;
+		case ClientMessageEnum::Move:
+			direction.parse(buffer);
+			break;
+		default:
+			break;
+		}
+	}
+
+	void paste(Buffer & buffer) const override {
+		buffer.writeU8(static_cast<uint8_t>(type));
+		switch(type) {
+		case ClientMessageEnum::Join:
+			name.paste(buffer);
+			break;
+		case ClientMessageEnum::Move:
+			direction.paste(buffer);
+			break;
+		default:
+			break;
+		}
+	}
+};
+
 enum class ServerMessageEnum : uint8_t {
 	Hello = 0,
 	AcceptedPlayer = 1,
@@ -599,6 +644,143 @@ public:
 			break;
 		case ServerMessageEnum::GameEnded:
 			gameEnded.scores.paste(buffer);
+			break;
+		}
+	}
+};
+
+/* ============================================================================================= */
+/*                                    Client-GUI messages                                        */
+/* ============================================================================================= */
+
+enum class DrawMessageEnum : uint8_t {
+	Lobby = 0,
+	Game = 1
+};
+
+class DataDrawMessage : public Data {
+public:
+	DrawMessageEnum type;
+	struct {
+		DataString serverName;
+		DataU8 playerCount;
+		DataU16 sizeX;
+		DataU16 sizeY;
+		DataU16 gameLength;
+		DataU16 explosionRadius;
+		DataU16 bombTimer;
+		DataMap<DataU8, DataPlayer> players;
+	} lobby;
+	struct {
+		DataString serverName;
+		DataU16 sizeX;
+		DataU16 sizeY;
+		DataU16 gameLength;
+		DataU16 turn;
+		DataMap<DataU8, DataPlayer> players;
+		DataMap<DataU8, DataPosition> playerPositions;
+		DataList<DataPosition> blocks;
+		DataList<DataBomb> bombs;
+		DataList<DataPosition> explosions;
+		DataMap<DataPlayer, DataU32> scores;
+	} game;
+
+	void parse(Buffer & buffer) override {
+		uint8_t enumValue = buffer.readU8();
+		if (enumValue > 1) {
+			throw badType();
+		}
+		type = static_cast<DrawMessageEnum>(enumValue);
+		switch (type) {
+		case DrawMessageEnum::Lobby:
+			lobby.serverName.parse(buffer);
+			lobby.playerCount.parse(buffer);
+			lobby.sizeX.parse(buffer);
+			lobby.sizeY.parse(buffer);
+			lobby.gameLength.parse(buffer);
+			lobby.explosionRadius.parse(buffer);
+			lobby.bombTimer.parse(buffer);
+			lobby.players.parse(buffer);
+			break;
+		case DrawMessageEnum::Game:
+			game.serverName.parse(buffer);
+			game.sizeX.parse(buffer);
+			game.sizeY.parse(buffer);
+			game.gameLength.parse(buffer);
+			game.turn.parse(buffer);
+			game.players.parse(buffer);
+			game.playerPositions.parse(buffer);
+			game.blocks.parse(buffer);
+			game.bombs.parse(buffer);
+			game.explosions.parse(buffer);
+			game.scores.parse(buffer);
+			break;
+		}
+	}
+
+	void paste(Buffer & buffer) const override {
+		buffer.writeU8(static_cast<uint8_t>(type));
+		switch (type) {
+		case DrawMessageEnum::Lobby:
+			lobby.serverName.paste(buffer);
+			lobby.playerCount.paste(buffer);
+			lobby.sizeX.paste(buffer);
+			lobby.sizeY.paste(buffer);
+			lobby.gameLength.paste(buffer);
+			lobby.explosionRadius.paste(buffer);
+			lobby.bombTimer.paste(buffer);
+			lobby.players.paste(buffer);
+			break;
+		case DrawMessageEnum::Game:
+			game.serverName.paste(buffer);
+			game.sizeX.paste(buffer);
+			game.sizeY.paste(buffer);
+			game.gameLength.paste(buffer);
+			game.turn.paste(buffer);
+			game.players.paste(buffer);
+			game.playerPositions.paste(buffer);
+			game.blocks.paste(buffer);
+			game.bombs.paste(buffer);
+			game.explosions.paste(buffer);
+			game.scores.paste(buffer);
+			break;
+		}
+	}
+};
+
+enum class InputMessageEnum : uint8_t {
+	PlaceBomb = 0,
+	PlaceBlock = 1,
+	Move = 2
+};
+
+class DataInputMessage : public Data {
+public:
+	InputMessageEnum type;
+	DataDirection direction;
+
+	void parse(Buffer & buffer) override {
+		uint8_t enumValue = buffer.readU8();
+		if (enumValue > 2) {
+			throw badType();
+		}
+		type = static_cast<InputMessageEnum>(enumValue);
+		switch (type) {
+		case InputMessageEnum::Move:
+			direction.parse(buffer);
+			break;
+		default:
+			break;
+		}
+	}
+
+	void paste(Buffer & buffer) const override {
+		buffer.writeU8(static_cast<uint8_t>(type));
+		switch (type) {
+		case InputMessageEnum::Move:
+			direction.paste(buffer);
+			break;
+		default:
 			break;
 		}
 	}
