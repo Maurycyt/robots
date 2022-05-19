@@ -22,3 +22,10 @@ class badRead : public std::exception {
 		return "not enough buffered data to read from.";
 	}
 };
+
+/* Exception thrown when user requests help message. */
+class needHelp : public std::exception {
+	const char * what() const noexcept override {
+		return "user requested for help message.";
+	}
+};

@@ -1,6 +1,7 @@
 CXX = g++
 CXX_FLAGS = -g -std=gnu++20 -Wall -Wextra -Wconversion -Wshadow -Werror -O2
 LINKS = -lboost_program_options -pthread
+HEADERS = utils.h options.h buffer.h messages.h
 
 .PHONY: all, clean, format
 
@@ -12,10 +13,10 @@ robots-client: robots-client.o
 robots-server: robots-server.o
 	$(CXX) $(CXX_FLAGS) $< $(LINKS) -o $@
 
-robots-client.o: robots-client.cpp utils.h options.h communication.h
+robots-client.o: robots-client.cpp $(HEADERS)
 	$(CXX) -c $(CXX_FLAGS) $< $(LINKS) -o $@
 
-robots-server.o: robots-server.cpp utils.h options.h communication.h
+robots-server.o: robots-server.cpp $(HEADERS)
 	$(CXX) -c $(CXX_FLAGS) $< $(LINKS) -o $@
 
 clean:

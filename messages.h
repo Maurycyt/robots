@@ -1,206 +1,12 @@
 #pragma once
 
-#include <boost/asio.hpp>
-#include <vector>
-#include <concepts>
-#include "exceptions.h"
-
-/* ============================================================================================= */
-/*                                            Buffer                                             */
-/* ============================================================================================= */
+#include "buffer.h"
 
 /*
- * A buffer wrapper which prepares data for transfer via network.
- * Handles reading and writing, taking care to convert between endianness.
- * Not instantiable, but serves as a base class for UDP and TCP buffers.
+ * This header file contains the definitions od all classes used
+ * store, manipulate, parse and un-parse (paste) messages
+ * between the Client and either the GUI or the game server.
  */
-class Buffer {
-protected:
-	size_t size;
-	char * buffer;
-	size_t left = 0, right = 0;
-
-	Buffer(const int newSize) : size(newSize) {
-		buffer = new char [size];
-	}
-
-	void clear() {
-		left = 0, right = 0;
-	}
-
-	/* Ensures that there are `bytes` bytes ready to read from the buffer. */
-	virtual void pull(const size_t bytes) = 0;
-
-	/* Ensures that there are `bytes` bytes ready to write into the buffer. */
-	virtual void push(const size_t bytes) = 0;
-
-public:
-	void writeU8(const uint8_t src) {
-		push(sizeof(src));
-		*(uint8_t *)(buffer + right) = src;
-		right += sizeof(uint8_t);
-	}
-
-	void writeU16(const uint16_t src) {
-		push(sizeof(src));
-		*(uint16_t *)(buffer + right) = htobe16(src);
-		right += sizeof(uint16_t);
-	}
-
-	void writeU32(const uint32_t src) {
-		push(sizeof(src));
-		*(uint32_t *)(buffer + right) = htobe32(src);
-		right += sizeof(uint32_t);
-	}
-
-	/*
-	 * While there is some part of the string left to write, make sure that there
-	 * is space to write some of its characters to the buffer. Once the space is
-	 * made, copy the memory contents, taking proper displacements into account.
-	 */
-	void writeStr(const std::string & src) {
-		const size_t length = src.size();
-		size_t written = 0;
-		while (written < length) {
-			size_t toWrite = std::min(length - written, size);
-			push(toWrite);
-			memcpy(buffer + right, src.c_str() + written, toWrite);
-			written += toWrite;
-			right += toWrite;
-		}
-	}
-
-	uint8_t readU8() {
-		pull(sizeof(uint8_t));
-		return *(uint8_t *)(buffer + (left += sizeof(uint8_t)) - sizeof(uint8_t));
-	}
-
-	uint16_t readU16() {
-		pull(sizeof(uint16_t));
-		return be16toh(*(uint16_t *)(buffer + (left += sizeof(uint16_t)) - sizeof(uint16_t)));
-	}
-
-	uint32_t readU32() {
-		pull(sizeof(uint32_t));
-		return be32toh(*(uint32_t *)(buffer + (left += sizeof(uint32_t)) - sizeof(uint32_t)));
-	}
-
-	/* Similar strategy to writeStr. */
-	std::string readStr(const size_t length) {
-		std::string result;
-		size_t read = 0;
-		while (read < length) {
-			size_t toRead = std::min(length - read, size);
-			pull(toRead);
-			result.append(buffer + left, toRead);
-			read += toRead;
-			left += toRead;
-		}
-		return result;
-	}
-
-	virtual ~Buffer() {
-		delete [] buffer;
-	}
-};
-
-/* Wrapper for a buffer associated with a UDP connection. */
-class UDPBuffer : public Buffer {
-private:
-	static const int UDP_BUFFER_SIZE = 65507;
-	boost::asio::ip::udp::socket & socket;
-	boost::asio::ip::udp::endpoint endpoint;
-
-public:
-	UDPBuffer(boost::asio::ip::udp::socket & newSocket) :
-	Buffer(UDP_BUFFER_SIZE),
-	socket(newSocket) {
-	}
-
-	void receive() {
-		clear();
-		right = socket.receive_from(boost::asio::buffer(buffer, size), endpoint);
-		std::cerr << "Received from " << endpoint << "\n";
-	}
-
-	void send() {
-		socket.send_to(boost::asio::buffer(buffer, right), endpoint);
-	}
-
-	void pull(const size_t bytes) override {
-		if (right - left < bytes) {
-			throw badRead();
-		}
-	}
-
-	void push(const size_t bytes) override {
-		if (size - right < bytes) {
-			throw badWrite();
-		}
-	}
-};
-
-/* Wrapper for a buffer associated with a TCP connection. */
-class TCPBuffer : public Buffer {
-private:
-	static const int TCP_BUFFER_SIZE = 2048;
-	boost::asio::ip::tcp::socket & socket;
-	boost::system::error_code error;
-
-public:
-	TCPBuffer(boost::asio::ip::tcp::socket & newSocket) :
-	Buffer(TCP_BUFFER_SIZE),
-	socket(newSocket) {
-	}
-
-	void receive(size_t bytes) {
-		std::cerr << "Receiving " << bytes << " bytes...\n";
-		boost::asio::read(
-			socket,
-			boost::asio::buffer(buffer + right, bytes),
-			error
-		);
-		if (error == boost::asio::error::eof) {
-			throw badRead();  // Connection closed cleanly by peer, although unrightfully.
-		} else if (error) {
-			throw boost::system::system_error(error); // Other error.
-		}
-		right += bytes;
-	}
-
-	void send() {
-		std::cerr << "Sending " << (right - left) << " bytes...\n";
-		boost::asio::write(
-			socket,
-			boost::asio::buffer(buffer + left, right - left)
-		);
-		clear();
-	}
-
-	/*
-	 * Guarantess that there are at least `bytes` bytes to read by
-	 * either receiving enough to fulfill that need or by first copying
-	 * the received-but-not-read bytes to the beginning and then receiving.
-	 */
-	void pull(const size_t bytes) override {
-		if (left + bytes > size) {
-			memmove(buffer, buffer + left, right - left);
-			right -= left;
-			left = 0;
-			std::cerr << "Shifting to allow reading " << bytes << " bytes.\n";
-		}
-		if (right - left < bytes) {
-			receive(bytes - (right - left));
-		}
-	}
-
-	void push(const size_t bytes) override {
-		if (right + bytes > size) {
-			std::cerr << "Pushing to accomodate " << bytes << " bytes.\n";
-			send();
-		}
-	}
-};
 
 /* ============================================================================================= */
 /*                             General and simple Data classes                                   */
@@ -432,22 +238,12 @@ enum class EventEnum : uint8_t {
 class DataEvent : public Data {
 public:
 	EventEnum type;
-	struct {
-		DataU32 bombID;
-		DataPosition position;
-	} bombPlaced;
-	struct {
-		DataU32 bombID;
-		DataList<DataU8> playersDestroyed;
-		DataList<DataPosition> blocksDestroyed;
-	} bombExploded;
-	struct {
-		DataU8 playerID;
-		DataPosition position;
-	} playerMoved;
-	struct {
-		DataPosition position;
-	} blockPlaced;
+
+	DataU32 bombID;
+	DataPosition position;
+	DataList<DataU8> playersDestroyed;
+	DataList<DataPosition> blocksDestroyed;
+	DataU8 playerID;
 
 	void parse(Buffer & buffer) override {
 		uint8_t enumValue = buffer.readU8();
@@ -457,20 +253,20 @@ public:
 		type = static_cast<EventEnum>(enumValue);
 		switch(type) {
 		case EventEnum::BombPlaced:
-			bombPlaced.bombID.parse(buffer);
-			bombPlaced.position.parse(buffer);
+			bombID.parse(buffer);
+			position.parse(buffer);
 			break;
 		case EventEnum::BombExploded:
-			bombExploded.bombID.parse(buffer);
-			bombExploded.playersDestroyed.parse(buffer);
-			bombExploded.blocksDestroyed.parse(buffer);
+			bombID.parse(buffer);
+			playersDestroyed.parse(buffer);
+			blocksDestroyed.parse(buffer);
 			break;
 		case EventEnum::PlayerMoved:
-			playerMoved.playerID.parse(buffer);
-			playerMoved.position.parse(buffer);
+			playerID.parse(buffer);
+			position.parse(buffer);
 			break;
 		case EventEnum::BlockPlaced:
-			blockPlaced.position.parse(buffer);
+			position.parse(buffer);
 		}
 	}
 
@@ -478,20 +274,20 @@ public:
 		buffer.writeU8(static_cast<uint8_t>(type));
 		switch (type) {
 			case EventEnum::BombPlaced:
-				bombPlaced.bombID.paste(buffer);
-				bombPlaced.position.paste(buffer);
+				bombID.paste(buffer);
+				position.paste(buffer);
 				break;
 			case EventEnum::BombExploded:
-				bombExploded.bombID.paste(buffer);
-				bombExploded.playersDestroyed.paste(buffer);
-				bombExploded.blocksDestroyed.paste(buffer);
+				bombID.paste(buffer);
+				playersDestroyed.paste(buffer);
+				blocksDestroyed.paste(buffer);
 				break;
 			case EventEnum::PlayerMoved:
-				playerMoved.playerID.paste(buffer);
-				playerMoved.position.paste(buffer);
+				playerID.paste(buffer);
+				position.paste(buffer);
 				break;
 			case EventEnum::BlockPlaced:
-				blockPlaced.position.paste(buffer);
+				position.paste(buffer);
 		}
 	}
 };
@@ -565,28 +361,19 @@ enum class ServerMessageEnum : uint8_t {
 class DataServerMessage : public Data {
 public:
 	ServerMessageEnum type;
-	struct {
-		DataString serverName;
-		DataU8 playerCount;
-		DataU16 sizeX;
-		DataU16 sizeY;
-		DataU16 gameLength;
-		DataU16 explosionRadius;
-		DataU16 bombTimer;
-	} hello;
-	struct {
-		DataU16 playerID;
-		DataPlayer player;
-	} acceptedPlayer;
-	struct {
-		DataMap<DataU8, DataPlayer> players;
-	} gameStarted;
-	struct {
-		DataList<DataEvent> events;
-	} turn;
-	struct {
-		DataMap<DataPlayer, DataU32> scores;
-	} gameEnded;
+	
+	DataString serverName;
+	DataU8 playerCount;
+	DataU16 sizeX;
+	DataU16 sizeY;
+	DataU16 gameLength;
+	DataU16 explosionRadius;
+	DataU16 bombTimer;
+	DataU16 playerID;
+	DataPlayer player;
+	DataMap<DataU8, DataPlayer> players;
+	DataList<DataEvent> events;
+	DataMap<DataPlayer, DataU32> scores;
 
 	void parse(Buffer & buffer) override {
 		uint8_t enumValue = buffer.readU8();
@@ -596,26 +383,26 @@ public:
 		type = static_cast<ServerMessageEnum>(enumValue);
 		switch(type) {
 		case ServerMessageEnum::Hello:
-			hello.serverName.parse(buffer);
-			hello.playerCount.parse(buffer);
-			hello.sizeX.parse(buffer);
-			hello.sizeY.parse(buffer);
-			hello.gameLength.parse(buffer);
-			hello.explosionRadius.parse(buffer);
-			hello.bombTimer.parse(buffer);
+			serverName.parse(buffer);
+			playerCount.parse(buffer);
+			sizeX.parse(buffer);
+			sizeY.parse(buffer);
+			gameLength.parse(buffer);
+			explosionRadius.parse(buffer);
+			bombTimer.parse(buffer);
 			break;
 		case ServerMessageEnum::AcceptedPlayer:
-			acceptedPlayer.playerID.parse(buffer);
-			acceptedPlayer.player.parse(buffer);
+			playerID.parse(buffer);
+			player.parse(buffer);
 			break;
 		case ServerMessageEnum::GameStarted:
-			gameStarted.players.parse(buffer);
+			players.parse(buffer);
 			break;
 		case ServerMessageEnum::Turn:
-			turn.events.parse(buffer);
+			events.parse(buffer);
 			break;
 		case ServerMessageEnum::GameEnded:
-			gameEnded.scores.parse(buffer);
+			scores.parse(buffer);
 			break;
 		}
 	}
@@ -624,26 +411,26 @@ public:
 		buffer.writeU8(static_cast<uint8_t>(type));
 		switch(type) {
 		case ServerMessageEnum::Hello:
-			hello.serverName.paste(buffer);
-			hello.playerCount.paste(buffer);
-			hello.sizeX.paste(buffer);
-			hello.sizeY.paste(buffer);
-			hello.gameLength.paste(buffer);
-			hello.explosionRadius.paste(buffer);
-			hello.bombTimer.paste(buffer);
+			serverName.paste(buffer);
+			playerCount.paste(buffer);
+			sizeX.paste(buffer);
+			sizeY.paste(buffer);
+			gameLength.paste(buffer);
+			explosionRadius.paste(buffer);
+			bombTimer.paste(buffer);
 			break;
 		case ServerMessageEnum::AcceptedPlayer:
-			acceptedPlayer.playerID.paste(buffer);
-			acceptedPlayer.player.paste(buffer);
+			playerID.paste(buffer);
+			player.paste(buffer);
 			break;
 		case ServerMessageEnum::GameStarted:
-			gameStarted.players.paste(buffer);
+			players.paste(buffer);
 			break;
 		case ServerMessageEnum::Turn:
-			turn.events.paste(buffer);
+			events.paste(buffer);
 			break;
 		case ServerMessageEnum::GameEnded:
-			gameEnded.scores.paste(buffer);
+			scores.paste(buffer);
 			break;
 		}
 	}
@@ -661,29 +448,21 @@ enum class DrawMessageEnum : uint8_t {
 class DataDrawMessage : public Data {
 public:
 	DrawMessageEnum type;
-	struct {
-		DataString serverName;
-		DataU8 playerCount;
-		DataU16 sizeX;
-		DataU16 sizeY;
-		DataU16 gameLength;
-		DataU16 explosionRadius;
-		DataU16 bombTimer;
-		DataMap<DataU8, DataPlayer> players;
-	} lobby;
-	struct {
-		DataString serverName;
-		DataU16 sizeX;
-		DataU16 sizeY;
-		DataU16 gameLength;
-		DataU16 turn;
-		DataMap<DataU8, DataPlayer> players;
-		DataMap<DataU8, DataPosition> playerPositions;
-		DataList<DataPosition> blocks;
-		DataList<DataBomb> bombs;
-		DataList<DataPosition> explosions;
-		DataMap<DataPlayer, DataU32> scores;
-	} game;
+
+	DataString serverName;
+	DataU8 playerCount;
+	DataU16 sizeX;
+	DataU16 sizeY;
+	DataU16 gameLength;
+	DataU16 explosionRadius;
+	DataU16 bombTimer;
+	DataU16 turn;
+	DataMap<DataU8, DataPlayer> players;
+	DataMap<DataU8, DataPosition> playerPositions;
+	DataList<DataPosition> blocks;
+	DataList<DataBomb> bombs;
+	DataList<DataPosition> explosions;
+	DataMap<DataPlayer, DataU32> scores;
 
 	void parse(Buffer & buffer) override {
 		uint8_t enumValue = buffer.readU8();
@@ -693,27 +472,27 @@ public:
 		type = static_cast<DrawMessageEnum>(enumValue);
 		switch (type) {
 		case DrawMessageEnum::Lobby:
-			lobby.serverName.parse(buffer);
-			lobby.playerCount.parse(buffer);
-			lobby.sizeX.parse(buffer);
-			lobby.sizeY.parse(buffer);
-			lobby.gameLength.parse(buffer);
-			lobby.explosionRadius.parse(buffer);
-			lobby.bombTimer.parse(buffer);
-			lobby.players.parse(buffer);
+			serverName.parse(buffer);
+			playerCount.parse(buffer);
+			sizeX.parse(buffer);
+			sizeY.parse(buffer);
+			gameLength.parse(buffer);
+			explosionRadius.parse(buffer);
+			bombTimer.parse(buffer);
+			players.parse(buffer);
 			break;
 		case DrawMessageEnum::Game:
-			game.serverName.parse(buffer);
-			game.sizeX.parse(buffer);
-			game.sizeY.parse(buffer);
-			game.gameLength.parse(buffer);
-			game.turn.parse(buffer);
-			game.players.parse(buffer);
-			game.playerPositions.parse(buffer);
-			game.blocks.parse(buffer);
-			game.bombs.parse(buffer);
-			game.explosions.parse(buffer);
-			game.scores.parse(buffer);
+			serverName.parse(buffer);
+			sizeX.parse(buffer);
+			sizeY.parse(buffer);
+			gameLength.parse(buffer);
+			turn.parse(buffer);
+			players.parse(buffer);
+			playerPositions.parse(buffer);
+			blocks.parse(buffer);
+			bombs.parse(buffer);
+			explosions.parse(buffer);
+			scores.parse(buffer);
 			break;
 		}
 	}
@@ -722,27 +501,27 @@ public:
 		buffer.writeU8(static_cast<uint8_t>(type));
 		switch (type) {
 		case DrawMessageEnum::Lobby:
-			lobby.serverName.paste(buffer);
-			lobby.playerCount.paste(buffer);
-			lobby.sizeX.paste(buffer);
-			lobby.sizeY.paste(buffer);
-			lobby.gameLength.paste(buffer);
-			lobby.explosionRadius.paste(buffer);
-			lobby.bombTimer.paste(buffer);
-			lobby.players.paste(buffer);
+			serverName.paste(buffer);
+			playerCount.paste(buffer);
+			sizeX.paste(buffer);
+			sizeY.paste(buffer);
+			gameLength.paste(buffer);
+			explosionRadius.paste(buffer);
+			bombTimer.paste(buffer);
+			players.paste(buffer);
 			break;
 		case DrawMessageEnum::Game:
-			game.serverName.paste(buffer);
-			game.sizeX.paste(buffer);
-			game.sizeY.paste(buffer);
-			game.gameLength.paste(buffer);
-			game.turn.paste(buffer);
-			game.players.paste(buffer);
-			game.playerPositions.paste(buffer);
-			game.blocks.paste(buffer);
-			game.bombs.paste(buffer);
-			game.explosions.paste(buffer);
-			game.scores.paste(buffer);
+			serverName.paste(buffer);
+			sizeX.paste(buffer);
+			sizeY.paste(buffer);
+			gameLength.paste(buffer);
+			turn.paste(buffer);
+			players.paste(buffer);
+			playerPositions.paste(buffer);
+			blocks.paste(buffer);
+			bombs.paste(buffer);
+			explosions.paste(buffer);
+			scores.paste(buffer);
 			break;
 		}
 	}

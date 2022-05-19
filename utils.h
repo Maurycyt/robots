@@ -13,3 +13,17 @@ std::pair<std::string, std::string> extractHostAndPort(const std::string & addre
 
 	return {address.substr(0, colonPosition), address.substr(colonPosition + 1)};
 }
+
+void installSignalHandler(int signal, void (*handler)(int), int flags) {
+	struct sigaction action;
+	sigset_t blockMask;
+
+	sigemptyset(&blockMask);
+	action.sa_handler = handler;
+	action.sa_mask = blockMask;
+	action.sa_flags = flags;
+
+	if(sigaction(signal, &action, NULL)) {
+		throw std::string("could not install SIGINT handler.");
+	}
+}
