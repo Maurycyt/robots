@@ -1,13 +1,23 @@
-BasedOnStyle: Google
-
-DerivePointerAlignment: false
+# Pointers and references
 PointerAlignment: Middle
 
+# Indentation
 UseTab: ForIndentation
 IndentWidth: 2
 TabWidth: 2
 AccessModifierOffset: -2
+BreakBeforeConceptDeclarations: false
+IndentRequires: false
 
-AlignAfterOpenBracket: AlwaysBreak
+# That weird function inlining
+AllowShortFunctionsOnASingleLine: None
+
+# Breaking
+BreakBeforeBraces: Attach
+AlignAfterOpenBracket: BlockIndent
 BreakConstructorInitializers: AfterColon
 BreakInheritanceList: AfterColon
+
+# Namespaces
+NamespaceIndentation: All
+FixNamespaceComments: true

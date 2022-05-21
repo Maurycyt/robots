@@ -1,19 +1,34 @@
 #pragma once
 
 #include <boost/asio.hpp>
-#include <vector>
 #include <concepts>
-
 #include <iostream>
+#include <utility>
+#include <vector>
 
 #include "exceptions.h"
 
-/* ============================================================================================= */
-/*                                            Buffer                                             */
-/* ============================================================================================= */
+/*
+ * Dummy classes to force receival or sending of list to and from the buffer.
+ * Similar to std::flush in iostream.
+ */
+
+class BufferForceReceive {};
+
+class BufferForceSend {};
+
+BufferForceReceive bReceive;
+
+BufferForceSend bSend;
 
 /*
- * A buffer wrapper which prepares data for transfer via network.
+ * =============================================================================
+ *                                  Buffer
+ * =============================================================================
+ */
+
+/*
+ * A buffer wrapper which prepares list for transfer via network.
  * Handles reading and writing, taking care to convert between endianness.
  * Not instantiable, but serves as a base class for UDP and TCP buffers.
  */
@@ -23,8 +38,8 @@ protected:
 	char * buffer;
 	size_t left = 0, right = 0;
 
-	Buffer(const int newSize) : size(newSize) {
-		buffer = new char [size];
+	explicit Buffer(size_t newSize) : size(newSize) {
+		buffer = new char[size];
 	}
 
 	void clear() {
@@ -32,10 +47,14 @@ protected:
 	}
 
 	/* Ensures that there are `bytes` bytes ready to read from the buffer. */
-	virtual void pull(const size_t bytes) = 0;
+	virtual void pull(size_t bytes) = 0;
 
 	/* Ensures that there are `bytes` bytes ready to write into the buffer. */
-	virtual void push(const size_t bytes) = 0;
+	virtual void push(size_t bytes) = 0;
+
+	virtual void receive([[maybe_unused]] size_t bytes) = 0;
+
+	virtual void send() = 0;
 
 public:
 	void writeU8(const uint8_t src) {
@@ -57,9 +76,10 @@ public:
 	}
 
 	/*
-	 * While there is some part of the string left to write, make sure that there
-	 * is space to write some of its characters to the buffer. Once the space is
-	 * made, copy the memory contents, taking proper displacements into account.
+	 * As long as there is some part of the string left to write, make sure that
+	 * there is space to write some of its characters to the buffer. Once the
+	 * space is made, copy the memory contents, taking proper displacements into
+	 * account.
 	 */
 	void writeStr(const std::string & src) {
 		const size_t length = src.size();
@@ -80,12 +100,16 @@ public:
 
 	uint16_t readU16() {
 		pull(sizeof(uint16_t));
-		return be16toh(*(uint16_t *)(buffer + (left += sizeof(uint16_t)) - sizeof(uint16_t)));
+		return be16toh(
+		    *(uint16_t *)(buffer + (left += sizeof(uint16_t)) - sizeof(uint16_t))
+		);
 	}
 
 	uint32_t readU32() {
 		pull(sizeof(uint32_t));
-		return be32toh(*(uint32_t *)(buffer + (left += sizeof(uint32_t)) - sizeof(uint32_t)));
+		return be32toh(
+		    *(uint32_t *)(buffer + (left += sizeof(uint32_t)) - sizeof(uint32_t))
+		);
 	}
 
 	/* Similar strategy to writeStr. */
@@ -102,8 +126,18 @@ public:
 		return result;
 	}
 
+	Buffer & operator>>([[maybe_unused]] const BufferForceReceive & rec) {
+		receive(0);
+		return *this;
+	}
+
+	Buffer & operator<<([[maybe_unused]] const BufferForceSend & rec) {
+		send();
+		return *this;
+	}
+
 	virtual ~Buffer() {
-		delete [] buffer;
+		delete[] buffer;
 	}
 };
 
@@ -114,20 +148,23 @@ private:
 	boost::asio::ip::udp::socket & socket;
 	boost::asio::ip::udp::endpoint endpoint;
 
-public:
-	UDPBuffer(boost::asio::ip::udp::socket & newSocket) :
-	Buffer(UDP_BUFFER_SIZE),
-	socket(newSocket) {
-	}
-
-	void receive() {
+	void receive([[maybe_unused]] size_t bytes) override {
 		clear();
 		right = socket.receive_from(boost::asio::buffer(buffer, size), endpoint);
 		std::cerr << "Received from " << endpoint << "\n";
 	}
 
-	void send() {
+	void send() override {
 		socket.send_to(boost::asio::buffer(buffer, right), endpoint);
+	}
+
+public:
+	UDPBuffer(
+	    boost::asio::ip::udp::socket & newSocket,
+	    boost::asio::ip::udp::endpoint newEndpoint
+	) :
+	    Buffer(UDP_BUFFER_SIZE),
+	    socket(newSocket), endpoint(std::move(newEndpoint)) {
 	}
 
 	void pull(const size_t bytes) override {
@@ -150,38 +187,41 @@ private:
 	boost::asio::ip::tcp::socket & socket;
 	boost::system::error_code error;
 
-public:
-	TCPBuffer(boost::asio::ip::tcp::socket & newSocket) :
-	Buffer(TCP_BUFFER_SIZE),
-	socket(newSocket) {
-	}
-
-	void receive(size_t bytes) {
+	void receive(size_t bytes) override {
 		std::cerr << "Receiving " << bytes << " bytes...\n";
+		if (bytes == 0) {
+			return;
+		}
 		boost::asio::read(
-			socket,
-			boost::asio::buffer(buffer + right, bytes),
-			error
+		    socket, boost::asio::buffer(buffer + right, bytes), error
 		);
 		if (error == boost::asio::error::eof) {
-			throw badRead();  // Connection closed cleanly by peer, although unrightfully.
+			throw badRead(); // Connection closed cleanly by peer, although
+			                 // unrightfully.
 		} else if (error) {
 			throw boost::system::system_error(error); // Other error.
 		}
 		right += bytes;
 	}
 
-	void send() {
+	void send() override {
 		std::cerr << "Sending " << (right - left) << " bytes...\n";
+		if (right - left == 0) {
+			return;
+		}
 		boost::asio::write(
-			socket,
-			boost::asio::buffer(buffer + left, right - left)
+		    socket, boost::asio::buffer(buffer + left, right - left)
 		);
 		clear();
 	}
 
+public:
+	explicit TCPBuffer(boost::asio::ip::tcp::socket & newSocket) :
+	    Buffer(TCP_BUFFER_SIZE), socket(newSocket) {
+	}
+
 	/*
-	 * Guarantess that there are at least `bytes` bytes to read by
+	 * Guarantees that there are at least `bytes` bytes to read by
 	 * either receiving enough to fulfill that need or by first copying
 	 * the received-but-not-read bytes to the beginning and then receiving.
 	 */
@@ -199,9 +239,8 @@ public:
 
 	void push(const size_t bytes) override {
 		if (right + bytes > size) {
-			std::cerr << "Pushing to accomodate " << bytes << " bytes.\n";
+			std::cerr << "Pushing to accommodate " << bytes << " bytes.\n";
 			send();
 		}
 	}
 };
-
