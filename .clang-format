@@ -8,6 +8,7 @@ TabWidth: 2
 AccessModifierOffset: -2
 BreakBeforeConceptDeclarations: false
 IndentRequires: false
+ReflowComments: true
 
 # That weird function inlining
 AllowShortFunctionsOnASingleLine: None

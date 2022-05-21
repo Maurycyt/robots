@@ -265,6 +265,8 @@ Buffer & operator>>(Buffer & buffer, DataEvent & data) {
 		return buffer >> data.playerID >> data.position;
 	case EventEnum::BlockPlaced:
 		return buffer >> data.position;
+	default:
+		return buffer;
 	}
 }
 
@@ -280,6 +282,8 @@ Buffer & operator<<(Buffer & buffer, const DataEvent & data) {
 		return buffer << data.playerID << data.position;
 	case EventEnum::BlockPlaced:
 		return buffer << data.position;
+	default:
+		return buffer;
 	}
 }
 
@@ -385,6 +389,8 @@ Buffer & operator<<(Buffer & buffer, const DataServerMessage & data) {
 		return buffer << data.events << bSend;
 	case ServerMessageEnum::GameEnded:
 		return buffer << data.scores << bSend;
+	default:
+		return buffer;
 	}
 }
 
@@ -408,6 +414,8 @@ Buffer & operator>>(Buffer & buffer, DataServerMessage & data) {
 		return buffer >> data.events;
 	case ServerMessageEnum::GameEnded:
 		return buffer >> data.scores;
+	default:
+		return buffer;
 	}
 }
 
@@ -451,6 +459,8 @@ Buffer & operator<<(Buffer & buffer, const DataDrawMessage & data) {
 		              << data.gameLength << data.turn << data.players
 		              << data.playerPositions << data.blocks << data.bombs
 		              << data.explosions << data.scores << bSend;
+	default:
+		return buffer;
 	}
 }
 
@@ -471,6 +481,8 @@ Buffer & operator>>(Buffer & buffer, DataDrawMessage & data) {
 		       data.gameLength >> data.turn >> data.players >>
 		       data.playerPositions >> data.blocks >> data.bombs >>
 		       data.explosions >> data.scores;
+	default:
+		return buffer;
 	}
 }
 

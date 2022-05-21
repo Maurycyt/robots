@@ -1,6 +1,9 @@
 #include <boost/asio.hpp>
 #include <boost/program_options.hpp>
 #include <iostream>
+#include <queue>
+#include <semaphore>
+#include <thread>
 
 #include "buffer.h"
 #include "messages.h"
@@ -12,15 +15,8 @@ using namespace boost::asio::ip;
 using namespace boost::program_options;
 
 namespace {
-	io_context clientContext;
-	tcp::resolver tcpResolver(clientContext);
-	udp::resolver udpResolver(clientContext);
-	tcp::endpoint serverEndpoint;
-	udp::endpoint GUIEndpoint;
-
-	variables_map options;
-
-	void handleOptions(int argc, char ** argv) {
+	variables_map handleOptions(int argc, char ** argv) {
+		variables_map options;
 		/* Parse options. Check argument validity. */
 		try {
 			options = parseOptions(argc, argv, getClientOptionsDescription());
@@ -46,64 +42,88 @@ namespace {
 			    " --help for usage.\n"
 			);
 		}
-	}
 
-	void resolveAddresses(char ** argv) {
-		try {
-			auto [serverHostStr, serverPortStr] =
-			    extractHostAndPort(options["server-address"].as<std::string>());
-			serverEndpoint = *tcpResolver.resolve(serverHostStr, serverPortStr);
-			auto [GUIHostStr, GUIPortStr] =
-			    extractHostAndPort(options["gui-address"].as<std::string>());
-			GUIEndpoint = *udpResolver.resolve(GUIHostStr, GUIPortStr);
-		} catch (std::exception & e) {
-			throw unrecoverableException(
-			    "Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) +
-			    " --help for usage.\n"
-			);
-		}
+		return options;
 	}
 
 	void throwInterrupt([[maybe_unused]] int signal) {
-		throw unrecoverableException("\nInterrupted.");
+		throw unrecoverableException("\nInterrupted.\n");
+	}
+
+	class ClientVariables {
+	public:
+		io_context clientContext{};
+
+		variables_map options;
+
+		udp::resolver UDPResolver{clientContext};
+		tcp::resolver TCPResolver{clientContext};
+		udp::endpoint GUIEndpoint{};
+		tcp::endpoint serverEndpoint{};
+		udp::socket GUISocket{clientContext};
+		tcp::socket serverSocket{clientContext};
+
+		std::queue<DataInputMessage> inputMessages{};
+		std::queue<DataServerMessage> serverMessages{};
+
+		std::counting_semaphore<> messageSemaphore{0};
+
+		ClientVariables(int argc, char ** argv) {
+			options = handleOptions(argc, argv);
+			GUIEndpoint = resolveAddress<udp::endpoint, udp::resolver>(
+			    UDPResolver, options["gui-address"].as<std::string>(),
+			    std::string(argv[0])
+			);
+			serverEndpoint = resolveAddress<tcp::endpoint, tcp::resolver>(
+			    TCPResolver, options["server-address"].as<std::string>(),
+			    std::string(argv[0])
+			);
+			GUISocket = udp::socket(
+			    clientContext, udp::endpoint(udp::v6(), options["port"].as<port_t>())
+			);
+			serverSocket.connect(serverEndpoint);
+		}
+	};
+
+	void listenToGUI(ClientVariables & variables) {
+		UDPBuffer GUIBufferIn(variables.GUISocket, variables.GUIEndpoint);
+	}
+
+	void listenToServer(ClientVariables & variables) {
+		TCPBuffer serverBufferIn(variables.serverSocket);
+	}
+
+	[[noreturn]] void mainLoop(ClientVariables & variables) {
+		/* If there are messages from both the GUI and the server, then does the
+		 * server's message have priority? Toggled with each loop rotation. */
+		bool serverPriority = false;
+		while (true) {
+			serverPriority = !serverPriority;
+			variables.messageSemaphore.acquire();
+		}
 	}
 } // namespace
 
 int main(int argc, char ** argv) {
 	try {
+		/* Install SIGINT handler, prepare options, endpoints, sockets, buffers, and
+		 * message queues. Save all to a ClientVariables class. */
 		installSignalHandler(SIGINT, throwInterrupt, SA_RESTART);
-		handleOptions(argc, argv);
-		resolveAddresses(argv);
+		ClientVariables variables{argc, argv};
 
-		std::cerr << "Server address: " << serverEndpoint
-		          << "\nGUI address: " << GUIEndpoint << "\nListening on port "
-		          << options["port"].as<port_t>() << "\n";
+		UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
+		TCPBuffer serverBufferOut(variables.serverSocket);
 
-		// udp::socket UDPSocket(
-		// 	clientContext,
-		// 	udp::endpoint(
-		// 		udp::v6(), options["port"].as<port_t>()
-		// 	)
-		// );
+		std::thread GUIListener(listenToGUI, std::ref(variables));
+		std::thread serverListener(listenToServer, std::ref(variables));
 
-		// UDPBuffer buffer(UDPSocket, GUIEndpoint);
+		std::cout << "Server address: " << variables.serverEndpoint
+		          << "\nGUI address: " << variables.GUIEndpoint
+		          << "\nListening on port "
+		          << variables.options["port"].as<port_t>() << "\n";
 
-		// buffer.receive();
-
-		tcp::acceptor TCPAcceptor(
-		    clientContext, tcp::endpoint(tcp::v6(), options["port"].as<port_t>())
-		);
-
-		tcp::socket TCPSocket = TCPAcceptor.accept();
-
-		TCPBuffer buffer(TCPSocket);
-
-		DataClientMessage message;
-		buffer >> message;
-
-		std::cerr << static_cast<int>(message.type) << "\n"
-		          << message.name.value.size() << "\n"
-		          << message.name.value << "\n";
+		/* Main loop. */
+		mainLoop(variables);
 
 	} catch (needHelp & e) {
 		/* Exception reserved for --help option. */

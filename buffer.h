@@ -150,7 +150,7 @@ private:
 
 	void receive([[maybe_unused]] size_t bytes) override {
 		clear();
-		right = socket.receive_from(boost::asio::buffer(buffer, size), endpoint);
+		right = socket.receive(boost::asio::buffer(buffer, size));
 		std::cerr << "Received from " << endpoint << "\n";
 	}
 
