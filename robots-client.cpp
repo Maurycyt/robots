@@ -1,7 +1,7 @@
 #include <boost/asio.hpp>
 #include <boost/program_options.hpp>
 #include <iostream>
-#include <queue>
+#include <unordered_map>
 #include <mutex>
 #include <thread>
 
@@ -129,10 +129,11 @@ namespace {
 	    ClientVariables & variables, const DataServerMessage & inMessage
 	) {
 		static DataDrawMessage outMessage;
+		static std::unordered_map<uint32_t, DataBomb> activeBombs;
+		static std::set<uint8_t> destroyedPlayers;
 
 		switch(inMessage.type) {
 		case ServerMessageEnum::Hello:
-			std::cerr << "Hello received.\n";
 			outMessage.serverName = inMessage.serverName;
 			outMessage.playerCount = inMessage.playerCount;
 			outMessage.sizeX = inMessage.sizeX;
@@ -142,52 +143,74 @@ namespace {
 			outMessage.bombTimer = inMessage.bombTimer;
 			break;
 		case ServerMessageEnum::AcceptedPlayer:
-			std::cerr << "Accepted player received.\n";
 			outMessage.players.map.insert({inMessage.playerID, inMessage.player});
+			outMessage.scores.map.insert({inMessage.playerID, {0}});
+			outMessage.playerCount.value++;
 			break;
 		case ServerMessageEnum::GameStarted:
-			std::cerr << "Game started received.\n";
 			variables.state = GameState::Game;
 			outMessage.type = DrawMessageEnum::Game;
 			outMessage.players = inMessage.players;
 			break;
 		case ServerMessageEnum::Turn:
-			std::cerr << "Turn received.\n";
+			/* First, decrease counters on bombs and forget destroyed players. */
+			for (auto & entry : activeBombs) {
+				entry.second.timer.value--;
+			}
+			destroyedPlayers.clear();
+
+			/* Then, process the events. */
 			outMessage.turn = inMessage.turn;
 			for (const DataEvent & event : inMessage.events.list) {
-				std::cerr << "Reading next event...\n";
 				DataBomb bomb;
 				switch(event.type) {
 				case EventEnum::BombPlaced:
-					std::cerr << "A bomb has been placed.\n";
 					bomb.position = event.position;
 					bomb.timer = inMessage.bombTimer;
-					outMessage.bombs.list.push_back(bomb);
+					activeBombs[event.bombID.value] = bomb;
 					break;
 				case EventEnum::BombExploded:
-					std::cerr << "A bomb exploded.\n";
+					activeBombs.erase(event.bombID.value);
+					for (const DataU8 & playerID : event.playersDestroyed.list) {
+						destroyedPlayers.insert(playerID.value);
+					}
+					for (const DataPosition & block : event.blocksDestroyed.list) {
+						outMessage.blocks.set.erase(block);
+					}
 					break;
 				case EventEnum::PlayerMoved:
-					std::cerr << "A player moved.\n";
 					outMessage.playerPositions.map[event.playerID] = event.position;
 					break;
 				case EventEnum::BlockPlaced:
-					std::cerr << "A block has been placed.\n";
-					outMessage.blocks.list.push_back(event.position);
+					if (!outMessage.blocks.set.contains(event.position)) {
+						outMessage.blocks.set.insert(event.position); //TODO: add set?
+					}
 					break;
 				default:
 					break;
+				}
+			}
+
+			/* Finally, copy new values to the list of bombs and update scores. */
+			outMessage.bombs.list.clear();
+			for (auto & entry : activeBombs) {
+				outMessage.bombs.list.push_back(entry.second);
+			}
+			for (auto & entry : outMessage.scores.map) {
+				if (!destroyedPlayers.contains(entry.first.value)) {
+					entry.second.value++;
 				}
 			}
 			break;
 		case ServerMessageEnum::GameEnded:
 			std::cerr << "Game ended received.\n";
 			variables.state = GameState::Lobby;
+			activeBombs.clear();
 			outMessage.type = DrawMessageEnum::Lobby;
 			outMessage.playerPositions.map.clear();
-			outMessage.blocks.list.clear();
+			outMessage.blocks.set.clear();
 			outMessage.bombs.list.clear();
-			outMessage.scores = inMessage.scores;
+//			outMessage.scores = inMessage.scores;
 			break;
 		default:
 			break;

@@ -4,7 +4,6 @@
 #include <concepts>
 #include <iostream>
 #include <utility>
-#include <vector>
 
 #include "exceptions.h"
 
@@ -94,7 +93,6 @@ public:
 	}
 
 	uint8_t readU8() {
-		std::cerr << "Reading U8...\n";
 		pull(sizeof(uint8_t));
 		return *(uint8_t *)(buffer + (left += sizeof(uint8_t)) - sizeof(uint8_t));
 	}
@@ -152,12 +150,11 @@ private:
 	void receive([[maybe_unused]] size_t bytes) override {
 		clear();
 		right = socket.receive(boost::asio::buffer(buffer, size));
-		std::cerr << "Received " << right << " bytes from " << endpoint << "\n";
 	}
 
 	void send() override {
-		size_t bytes = socket.send_to(boost::asio::buffer(buffer, right), endpoint);
-		std::cerr << "Sent " << bytes << " bytes to " << endpoint << "\n";
+		socket.send_to(boost::asio::buffer(buffer, right), endpoint);
+		clear();
 	}
 
 public:
@@ -193,7 +190,6 @@ private:
 		if (bytes == 0) {
 			return;
 		}
-		std::cerr << "Receiving " << bytes << " bytes...\n";
 		boost::asio::read(
 		    socket, boost::asio::buffer(buffer + right, bytes), error
 		);
@@ -210,7 +206,6 @@ private:
 		if (right - left == 0) {
 			return;
 		}
-		std::cerr << "Sending " << (right - left) << " bytes...\n";
 		boost::asio::write(
 		    socket, boost::asio::buffer(buffer + left, right - left)
 		);
@@ -228,12 +223,11 @@ public:
 	 * the received-but-not-read bytes to the beginning and then receiving.
 	 */
 	void pull(const size_t bytes) override {
-		std::cerr << "Pulling " << bytes << " bytes.\n";
+//		std::cerr << "Pulling " << bytes << " bytes.\n";
 		if (left + bytes > size) {
 			memmove(buffer, buffer + left, right - left);
 			right -= left;
 			left = 0;
-			std::cerr << "Shifting to allow reading " << bytes << " bytes.\n";
 		}
 		if (right - left < bytes) {
 			receive(bytes - (right - left));
@@ -241,8 +235,8 @@ public:
 	}
 
 	void push(const size_t bytes) override {
+//		std::cerr << "Pushing " << bytes << " bytes.\n";
 		if (right + bytes > size) {
-			std::cerr << "Pushing to accommodate " << bytes << " bytes.\n";
 			send();
 		}
 	}
