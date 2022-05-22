@@ -28,7 +28,7 @@ void installSignalHandler(int signal, void (*handler)(int), int flags) {
 	action.sa_flags = flags;
 
 	if (sigaction(signal, &action, nullptr)) {
-		throw unrecoverableException("could not install SIGINT handler.");
+		throw UnrecoverableException("could not install SIGINT handler.");
 	}
 }
 
@@ -46,7 +46,7 @@ E resolveAddress(
 		auto [addressStr, portStr] = extractHostAndPort(address);
 		return *resolver.resolve(addressStr, portStr);
 	} catch (std::exception & e) {
-		throw unrecoverableException(
+		throw UnrecoverableException(
 		    "Error: " + std::string(e.what()) + "\nRun " + programName +
 		    " --help for usage.\n"
 		);

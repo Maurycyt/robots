@@ -16,11 +16,10 @@
 
 /* General class interface for structured data representation. */
 template <typename T>
-concept Data =
-requires(Buffer & buffer, T & t) {
-	{ buffer << t } -> std::same_as<Buffer &>;
-	{ buffer >> t } -> std::same_as<Buffer &>;
-};
+concept Data = requires(Buffer & buffer, T & t) {
+	               { buffer << t } -> std::same_as<Buffer &>;
+	               { buffer >> t } -> std::same_as<Buffer &>;
+               };
 
 /* Integral leaf nodes for structured data representation. */
 class DataU8 {
@@ -182,7 +181,12 @@ Buffer & operator>>(Buffer & buffer, DataPlayer & data) {
 	return buffer >> data.name >> data.address;
 }
 
-enum class DirectionEnum : uint8_t { Up = 0, Right = 1, Down = 2, Left = 3 };
+enum class DirectionEnum : uint8_t {
+	Up = 0,
+	Right = 1,
+	Down = 2,
+	Left = 3
+};
 
 class DataDirection {
 public:
@@ -197,7 +201,7 @@ Buffer & operator<<(Buffer & buffer, const DataDirection & data) {
 Buffer & operator>>(Buffer & buffer, DataDirection & data) {
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 3) {
-		throw badType();
+		throw BadType();
 	}
 	data.direction = static_cast<DirectionEnum>(enumValue);
 	return buffer;
@@ -252,7 +256,7 @@ public:
 Buffer & operator>>(Buffer & buffer, DataEvent & data) {
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 3) {
-		throw badType();
+		throw BadType();
 	}
 	data.type = static_cast<EventEnum>(enumValue);
 	switch (data.type) {
@@ -335,7 +339,7 @@ Buffer & operator>>(Buffer & buffer, DataClientMessage & data) {
 	buffer >> bReceive;
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 3) {
-		throw badType();
+		throw BadType();
 	}
 	data.type = static_cast<ClientMessageEnum>(enumValue);
 	switch (data.type) {
@@ -367,7 +371,7 @@ public:
 	DataU16 gameLength;
 	DataU16 explosionRadius;
 	DataU16 bombTimer;
-	DataU16 playerID;
+	DataU8 playerID;
 	DataPlayer player;
 	DataMap<DataU8, DataPlayer> players;
 	DataList<DataEvent> events;
@@ -398,7 +402,7 @@ Buffer & operator>>(Buffer & buffer, DataServerMessage & data) {
 	buffer >> bReceive;
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 4) {
-		throw badType();
+		throw BadType();
 	}
 	data.type = static_cast<ServerMessageEnum>(enumValue);
 	switch (data.type) {
@@ -425,7 +429,10 @@ Buffer & operator>>(Buffer & buffer, DataServerMessage & data) {
  * =============================================================================
  */
 
-enum class DrawMessageEnum : uint8_t { Lobby = 0, Game = 1 };
+enum class DrawMessageEnum : uint8_t {
+	Lobby = 0,
+	Game = 1
+};
 
 class DataDrawMessage {
 public:
@@ -468,7 +475,7 @@ Buffer & operator>>(Buffer & buffer, DataDrawMessage & data) {
 	buffer >> bReceive;
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 1) {
-		throw badType();
+		throw BadType();
 	}
 	data.type = static_cast<DrawMessageEnum>(enumValue);
 	switch (data.type) {
@@ -512,7 +519,7 @@ Buffer & operator>>(Buffer & buffer, DataInputMessage & data) {
 	buffer >> bReceive;
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 2) {
-		throw badType();
+		throw BadType();
 	}
 	data.type = static_cast<InputMessageEnum>(enumValue);
 	switch (data.type) {

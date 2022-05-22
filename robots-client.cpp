@@ -21,7 +21,7 @@ namespace {
 		try {
 			options = parseOptions(argc, argv, getClientOptionsDescription());
 		} catch (std::exception & e) {
-			throw unrecoverableException(
+			throw UnrecoverableException(
 			    "Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) +
 			    " --help for usage.\n"
 			);
@@ -29,7 +29,7 @@ namespace {
 
 		/* Print help message if requested. */
 		if (options.count("help")) {
-			throw needHelp();
+			throw NeedHelp();
 		}
 
 		/* Finalize parsing, prepare argument values, including checking the
@@ -37,7 +37,7 @@ namespace {
 		try {
 			notifyOptions(options);
 		} catch (std::exception & e) {
-			throw unrecoverableException(
+			throw UnrecoverableException(
 			    "Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) +
 			    " --help for usage.\n"
 			);
@@ -47,11 +47,17 @@ namespace {
 	}
 
 	void throwInterrupt([[maybe_unused]] int signal) {
-		throw unrecoverableException("\nInterrupted.\n");
+		throw UnrecoverableException("\nInterrupted.\n");
 	}
+
+	enum class GameState {
+		Lobby,
+		Game
+	};
 
 	class ClientVariables {
 	public:
+		/* Communication related variables. */
 		io_context clientContext{};
 
 		variables_map options;
@@ -64,9 +70,13 @@ namespace {
 		tcp::socket serverSocket{clientContext};
 
 		std::queue<DataInputMessage> inputMessages{};
+		std::binary_semaphore inputSemaphore{1};
 		std::queue<DataServerMessage> serverMessages{};
+		std::binary_semaphore serverSemaphore{1};
 
 		std::counting_semaphore<> messageSemaphore{0};
+
+		GameState state{GameState::Lobby};
 
 		ClientVariables(int argc, char ** argv) {
 			options = handleOptions(argc, argv);
@@ -85,21 +95,159 @@ namespace {
 		}
 	};
 
-	void listenToGUI(ClientVariables & variables) {
+	[[noreturn]] void listenToGUI(ClientVariables & variables) {
 		UDPBuffer GUIBufferIn(variables.GUISocket, variables.GUIEndpoint);
+		DataInputMessage message;
+
+		while (true) {
+			try {
+				GUIBufferIn >> message;
+			} catch (BadRead & e) {
+				continue;
+			} catch (BadType & e) {
+				continue;
+			}
+			variables.inputSemaphore.acquire();
+			variables.inputMessages.push(message);
+			variables.inputSemaphore.release();
+			variables.messageSemaphore.release();
+		}
 	}
 
-	void listenToServer(ClientVariables & variables) {
+	[[noreturn]] void listenToServer(ClientVariables & variables) {
 		TCPBuffer serverBufferIn(variables.serverSocket);
+
+		while (true) {
+			DataServerMessage message;
+			serverBufferIn >> message;
+			variables.serverSemaphore.acquire();
+			variables.serverMessages.push(message);
+			variables.serverSemaphore.release();
+			variables.messageSemaphore.release();
+		}
+	}
+
+	const DataClientMessage & processInputMessage(
+	    const ClientVariables & variables, const DataInputMessage & inMessage
+	) {
+		static DataClientMessage outMessage;
+		if (variables.state == GameState::Lobby) {
+			/* If GameStarted message not received, send Join. */
+			outMessage.type = ClientMessageEnum::Join;
+			outMessage.name.value =
+			    variables.options["player-name"].as<std::string>();
+		} else {
+			/* Otherwise, just forward the message, pretty much. */
+			switch (inMessage.type) {
+			case InputMessageEnum::PlaceBomb:
+				outMessage.type = ClientMessageEnum::PlaceBomb;
+				break;
+			case InputMessageEnum::PlaceBlock:
+				outMessage.type = ClientMessageEnum::PlaceBlock;
+				break;
+			case InputMessageEnum::Move:
+				outMessage.type = ClientMessageEnum::Move;
+				outMessage.direction = inMessage.direction;
+				break;
+			default:
+				break;
+			}
+		}
+		return outMessage;
+	}
+
+	const DataDrawMessage & processServerMessage(
+	    ClientVariables & variables, const DataServerMessage & inMessage
+	) {
+		static DataDrawMessage outMessage;
+
+		switch(inMessage.type) {
+		case ServerMessageEnum::Hello:
+			outMessage.serverName = inMessage.serverName;
+			outMessage.playerCount = inMessage.playerCount;
+			outMessage.sizeX = inMessage.sizeX;
+			outMessage.sizeY = inMessage.sizeY;
+			outMessage.gameLength = inMessage.gameLength;
+			outMessage.explosionRadius = inMessage.explosionRadius;
+			outMessage.bombTimer = inMessage.bombTimer;
+			break;
+		case ServerMessageEnum::AcceptedPlayer:
+			outMessage.players.map.insert({inMessage.playerID, inMessage.player});
+			break;
+		case ServerMessageEnum::GameStarted:
+			variables.state = GameState::Game;
+			outMessage.type = DrawMessageEnum::Game;
+			outMessage.players = inMessage.players;
+			break;
+		case ServerMessageEnum::Turn:
+			for (const DataEvent & event : inMessage.events.list) {
+				DataBomb bomb;
+				switch(event.type) {
+				case EventEnum::BombPlaced:
+					std::cerr << "A bomb has been placed.\n";
+					bomb.position = event.position;
+					bomb.timer = inMessage.bombTimer;
+					outMessage.bombs.list.push_back(bomb);
+					break;
+				case EventEnum::BombExploded:
+					std::cerr << "A bomb exploded.\n";
+					break;
+				case EventEnum::PlayerMoved:
+					std::cerr << "A player moved.\n";
+					outMessage.playerPositions.map[event.playerID] = event.position;
+					break;
+				case EventEnum::BlockPlaced:
+					std::cerr << "A block has been placed.\n";
+					outMessage.blocks.list.push_back(event.position);
+					break;
+				default:
+					break;
+				}
+			}
+			break;
+		case ServerMessageEnum::GameEnded:
+			variables.state = GameState::Lobby;
+			outMessage.type = DrawMessageEnum::Lobby;
+			outMessage.playerPositions.map.clear();
+			outMessage.blocks.list.clear();
+			outMessage.bombs.list.clear();
+			outMessage.scores = inMessage.scores;
+			break;
+		default:
+			break;
+		}
+
+		return outMessage;
 	}
 
 	[[noreturn]] void mainLoop(ClientVariables & variables) {
+		UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
+		TCPBuffer serverBufferOut(variables.serverSocket);
 		/* If there are messages from both the GUI and the server, then does the
 		 * server's message have priority? Toggled with each loop rotation. */
 		bool serverPriority = false;
 		while (true) {
 			serverPriority = !serverPriority;
 			variables.messageSemaphore.acquire();
+
+			if ((serverPriority && !variables.serverMessages.empty()) ||
+			    variables.inputMessages.empty()) {
+				/* Process message from server. */
+				variables.serverSemaphore.acquire();
+				DataServerMessage inMessage = variables.serverMessages.front();
+				variables.serverMessages.pop();
+				variables.serverSemaphore.release();
+
+				 GUIBufferOut << processServerMessage(variables, inMessage);
+			} else {
+				/* Process message from GUI. */
+				variables.inputSemaphore.acquire();
+				DataInputMessage inMessage = variables.inputMessages.front();
+				variables.inputMessages.pop();
+				variables.inputSemaphore.release();
+
+				serverBufferOut << processInputMessage(variables, inMessage);
+			}
 		}
 	}
 } // namespace
@@ -110,9 +258,6 @@ int main(int argc, char ** argv) {
 		 * message queues. Save all to a ClientVariables class. */
 		installSignalHandler(SIGINT, throwInterrupt, SA_RESTART);
 		ClientVariables variables{argc, argv};
-
-		UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
-		TCPBuffer serverBufferOut(variables.serverSocket);
 
 		std::thread GUIListener(listenToGUI, std::ref(variables));
 		std::thread serverListener(listenToServer, std::ref(variables));
@@ -125,11 +270,11 @@ int main(int argc, char ** argv) {
 		/* Main loop. */
 		mainLoop(variables);
 
-	} catch (needHelp & e) {
+	} catch (NeedHelp & e) {
 		/* Exception reserved for --help option. */
 		std::cout << getClientOptionsDescription();
 		return 0;
-	} catch (unrecoverableException & e) {
+	} catch (UnrecoverableException & e) {
 		/* Something went wrong, we know what it is and cannot recover from it. */
 		std::cerr << e.what();
 		return 1;

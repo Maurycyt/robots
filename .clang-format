@@ -10,8 +10,14 @@ BreakBeforeConceptDeclarations: false
 IndentRequires: false
 ReflowComments: true
 
-# That weird function inlining
+# Inlining
+AllowShortBlocksOnASingleLine: Never
+AllowShortCaseLabelsOnASingleLine: false
+AllowShortEnumsOnASingleLine: false
 AllowShortFunctionsOnASingleLine: None
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLambdasOnASingleLine: None
+AllowShortLoopsOnASingleLine: false
 
 # Breaking
 BreakBeforeBraces: Attach

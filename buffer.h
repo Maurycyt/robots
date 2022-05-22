@@ -169,13 +169,13 @@ public:
 
 	void pull(const size_t bytes) override {
 		if (right - left < bytes) {
-			throw badRead();
+			throw BadRead();
 		}
 	}
 
 	void push(const size_t bytes) override {
 		if (size - right < bytes) {
-			throw badWrite();
+			throw BadWrite();
 		}
 	}
 };
@@ -196,7 +196,7 @@ private:
 		    socket, boost::asio::buffer(buffer + right, bytes), error
 		);
 		if (error == boost::asio::error::eof) {
-			throw badRead(); // Connection closed cleanly by peer, although
+			throw BadRead(); // Connection closed cleanly by peer, although
 			                 // unrightfully.
 		} else if (error) {
 			throw boost::system::system_error(error); // Other error.
