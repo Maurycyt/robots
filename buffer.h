@@ -94,6 +94,7 @@ public:
 	}
 
 	uint8_t readU8() {
+		std::cerr << "Reading U8...\n";
 		pull(sizeof(uint8_t));
 		return *(uint8_t *)(buffer + (left += sizeof(uint8_t)) - sizeof(uint8_t));
 	}
@@ -190,9 +191,9 @@ private:
 
 	void receive(size_t bytes) override {
 		if (bytes == 0) {
-			std::cerr << "Receiving " << bytes << " bytes...\n";
 			return;
 		}
+		std::cerr << "Receiving " << bytes << " bytes...\n";
 		boost::asio::read(
 		    socket, boost::asio::buffer(buffer + right, bytes), error
 		);
@@ -207,9 +208,9 @@ private:
 
 	void send() override {
 		if (right - left == 0) {
-			std::cerr << "Sending " << (right - left) << " bytes...\n";
 			return;
 		}
+		std::cerr << "Sending " << (right - left) << " bytes...\n";
 		boost::asio::write(
 		    socket, boost::asio::buffer(buffer + left, right - left)
 		);
@@ -227,6 +228,7 @@ public:
 	 * the received-but-not-read bytes to the beginning and then receiving.
 	 */
 	void pull(const size_t bytes) override {
+		std::cerr << "Pulling " << bytes << " bytes.\n";
 		if (left + bytes > size) {
 			memmove(buffer, buffer + left, right - left);
 			right -= left;
