@@ -93,7 +93,9 @@ namespace {
 			GUISocket = udp::socket(
 			    clientContext, udp::endpoint(udp::v6(), options["port"].as<port_t>())
 			);
+			std::cerr << "Trying connection with " << serverEndpoint << "\n";
 			serverSocket.connect(serverEndpoint);
+			std::cerr << "Connection succeeded!\n";
 		}
 	};
 
@@ -218,10 +220,6 @@ namespace {
 			std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
 
 			serverBufferOut << processInputMessage(variables, inMessage);
-//			variables.inputSemaphore.acquire();
-//			variables.inputMessages.push(message);
-//			variables.inputSemaphore.release();
-//			variables.messageSemaphore.release();
 		}
 	}
 
@@ -236,43 +234,8 @@ namespace {
 			std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
 
 			GUIBufferOut << processServerMessage(variables, inMessage);
-//			variables.serverSemaphore.acquire();
-//			variables.serverMessages.push(message);
-//			variables.serverSemaphore.release();
-//			variables.messageSemaphore.release();
 		}
 	}
-
-//	[[noreturn]] void mainLoop(ClientVariables & variables) {
-//		UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
-//		TCPBuffer serverBufferOut(variables.serverSocket);
-//		/* If there are messages from both the GUI and the server, then does the
-//		 * server's message have priority? Toggled with each loop rotation. */
-//		bool serverPriority = false;
-//		while (true) {
-//			serverPriority = !serverPriority;
-//			variables.messageSemaphore.acquire();
-//
-//			if ((serverPriority && !variables.serverMessages.empty()) ||
-//			    variables.inputMessages.empty()) {
-//				/* Process message from server. */
-//				variables.serverSemaphore.acquire();
-//				DataServerMessage inMessage = variables.serverMessages.front();
-//				variables.serverMessages.pop();
-//				variables.serverSemaphore.release();
-//
-//				 GUIBufferOut << processServerMessage(variables, inMessage);
-//			} else {
-//				/* Process message from GUI. */
-//				variables.inputSemaphore.acquire();
-//				DataInputMessage inMessage = variables.inputMessages.front();
-//				variables.inputMessages.pop();
-//				variables.inputSemaphore.release();
-//
-//				serverBufferOut << processInputMessage(variables, inMessage);
-//			}
-//		}
-//	}
 } // namespace
 
 int main(int argc, char ** argv) {
@@ -291,7 +254,6 @@ int main(int argc, char ** argv) {
 		          << variables.options["port"].as<port_t>() << "\n";
 
 		/* Main loop. */
-//		mainLoop(variables);
 		GUIListener.join();
 		serverListener.join();
 
@@ -305,7 +267,7 @@ int main(int argc, char ** argv) {
 		return 1;
 	} catch (std::exception & e) {
 		/* Something went wrong and we were not prepared. This is bad. */
-		std::cerr << e.what();
+		std::cerr << e.what() << "\n";
 		return 2;
 	}
 }
