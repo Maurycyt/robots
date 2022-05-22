@@ -2,7 +2,7 @@
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <queue>
-#include <semaphore>
+#include <mutex>
 #include <thread>
 
 #include "buffer.h"
@@ -69,12 +69,14 @@ namespace {
 		udp::socket GUISocket{clientContext};
 		tcp::socket serverSocket{clientContext};
 
-		std::queue<DataInputMessage> inputMessages{};
-		std::counting_semaphore<1> inputSemaphore{1};
-		std::queue<DataServerMessage> serverMessages{};
-		std::counting_semaphore<1> serverSemaphore{1};
+		std::mutex variablesMutex;
 
-		std::counting_semaphore<65536> messageSemaphore{0};
+//		std::queue<DataInputMessage> inputMessages{};
+//		std::counting_semaphore<1> inputSemaphore{1};
+//		std::queue<DataServerMessage> serverMessages{};
+//		std::counting_semaphore<1> serverSemaphore{1};
+//
+//		std::counting_semaphore<65536> messageSemaphore{0};
 
 		GameState state{GameState::Lobby};
 
@@ -94,38 +96,6 @@ namespace {
 			serverSocket.connect(serverEndpoint);
 		}
 	};
-
-	[[noreturn]] void listenToGUI(ClientVariables & variables) {
-		UDPBuffer GUIBufferIn(variables.GUISocket, variables.GUIEndpoint);
-		DataInputMessage message;
-
-		while (true) {
-			try {
-				GUIBufferIn >> message;
-			} catch (BadRead & e) {
-				continue;
-			} catch (BadType & e) {
-				continue;
-			}
-			variables.inputSemaphore.acquire();
-			variables.inputMessages.push(message);
-			variables.inputSemaphore.release();
-			variables.messageSemaphore.release();
-		}
-	}
-
-	[[noreturn]] void listenToServer(ClientVariables & variables) {
-		TCPBuffer serverBufferIn(variables.serverSocket);
-
-		while (true) {
-			DataServerMessage message;
-			serverBufferIn >> message;
-			variables.serverSemaphore.acquire();
-			variables.serverMessages.push(message);
-			variables.serverSemaphore.release();
-			variables.messageSemaphore.release();
-		}
-	}
 
 	const DataClientMessage & processInputMessage(
 	    const ClientVariables & variables, const DataInputMessage & inMessage
@@ -231,36 +201,78 @@ namespace {
 		return outMessage;
 	}
 
-	[[noreturn]] void mainLoop(ClientVariables & variables) {
-		UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
+	[[noreturn]] void listenToGUI(ClientVariables & variables) {
+		UDPBuffer GUIBufferIn(variables.GUISocket, variables.GUIEndpoint);
 		TCPBuffer serverBufferOut(variables.serverSocket);
-		/* If there are messages from both the GUI and the server, then does the
-		 * server's message have priority? Toggled with each loop rotation. */
-		bool serverPriority = false;
+		DataInputMessage inMessage;
+
 		while (true) {
-			serverPriority = !serverPriority;
-			variables.messageSemaphore.acquire();
-
-			if ((serverPriority && !variables.serverMessages.empty()) ||
-			    variables.inputMessages.empty()) {
-				/* Process message from server. */
-				variables.serverSemaphore.acquire();
-				DataServerMessage inMessage = variables.serverMessages.front();
-				variables.serverMessages.pop();
-				variables.serverSemaphore.release();
-
-				 GUIBufferOut << processServerMessage(variables, inMessage);
-			} else {
-				/* Process message from GUI. */
-				variables.inputSemaphore.acquire();
-				DataInputMessage inMessage = variables.inputMessages.front();
-				variables.inputMessages.pop();
-				variables.inputSemaphore.release();
-
-				serverBufferOut << processInputMessage(variables, inMessage);
+			try {
+				GUIBufferIn >> inMessage;
+			} catch (BadRead & e) {
+				continue;
+			} catch (BadType & e) {
+				continue;
 			}
+
+			std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
+
+			serverBufferOut << processInputMessage(variables, inMessage);
+//			variables.inputSemaphore.acquire();
+//			variables.inputMessages.push(message);
+//			variables.inputSemaphore.release();
+//			variables.messageSemaphore.release();
 		}
 	}
+
+	[[noreturn]] void listenToServer(ClientVariables & variables) {
+		TCPBuffer serverBufferIn(variables.serverSocket);
+		UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
+		DataServerMessage inMessage;
+
+		while (true) {
+			serverBufferIn >> inMessage;
+
+			std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
+
+			GUIBufferOut << processServerMessage(variables, inMessage);
+//			variables.serverSemaphore.acquire();
+//			variables.serverMessages.push(message);
+//			variables.serverSemaphore.release();
+//			variables.messageSemaphore.release();
+		}
+	}
+
+//	[[noreturn]] void mainLoop(ClientVariables & variables) {
+//		UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
+//		TCPBuffer serverBufferOut(variables.serverSocket);
+//		/* If there are messages from both the GUI and the server, then does the
+//		 * server's message have priority? Toggled with each loop rotation. */
+//		bool serverPriority = false;
+//		while (true) {
+//			serverPriority = !serverPriority;
+//			variables.messageSemaphore.acquire();
+//
+//			if ((serverPriority && !variables.serverMessages.empty()) ||
+//			    variables.inputMessages.empty()) {
+//				/* Process message from server. */
+//				variables.serverSemaphore.acquire();
+//				DataServerMessage inMessage = variables.serverMessages.front();
+//				variables.serverMessages.pop();
+//				variables.serverSemaphore.release();
+//
+//				 GUIBufferOut << processServerMessage(variables, inMessage);
+//			} else {
+//				/* Process message from GUI. */
+//				variables.inputSemaphore.acquire();
+//				DataInputMessage inMessage = variables.inputMessages.front();
+//				variables.inputMessages.pop();
+//				variables.inputSemaphore.release();
+//
+//				serverBufferOut << processInputMessage(variables, inMessage);
+//			}
+//		}
+//	}
 } // namespace
 
 int main(int argc, char ** argv) {
@@ -279,7 +291,9 @@ int main(int argc, char ** argv) {
 		          << variables.options["port"].as<port_t>() << "\n";
 
 		/* Main loop. */
-		mainLoop(variables);
+//		mainLoop(variables);
+		GUIListener.join();
+		serverListener.join();
 
 	} catch (NeedHelp & e) {
 		/* Exception reserved for --help option. */
