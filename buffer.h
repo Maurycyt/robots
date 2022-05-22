@@ -151,11 +151,12 @@ private:
 	void receive([[maybe_unused]] size_t bytes) override {
 		clear();
 		right = socket.receive(boost::asio::buffer(buffer, size));
-		std::cerr << "Received from " << endpoint << "\n";
+		std::cerr << "Received " << right << " bytes from " << endpoint << "\n";
 	}
 
 	void send() override {
-		socket.send_to(boost::asio::buffer(buffer, right), endpoint);
+		size_t bytes = socket.send_to(boost::asio::buffer(buffer, right), endpoint);
+		std::cerr << "Sent " << bytes << " bytes to " << endpoint << "\n";
 	}
 
 public:
@@ -188,8 +189,8 @@ private:
 	boost::system::error_code error;
 
 	void receive(size_t bytes) override {
-		std::cerr << "Receiving " << bytes << " bytes...\n";
 		if (bytes == 0) {
+			std::cerr << "Receiving " << bytes << " bytes...\n";
 			return;
 		}
 		boost::asio::read(
@@ -205,8 +206,8 @@ private:
 	}
 
 	void send() override {
-		std::cerr << "Sending " << (right - left) << " bytes...\n";
 		if (right - left == 0) {
+			std::cerr << "Sending " << (right - left) << " bytes...\n";
 			return;
 		}
 		boost::asio::write(

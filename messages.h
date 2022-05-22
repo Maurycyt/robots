@@ -406,6 +406,7 @@ Buffer & operator>>(Buffer & buffer, DataServerMessage & data) {
 		throw BadType();
 	}
 	data.type = static_cast<ServerMessageEnum>(enumValue);
+	std::cerr << "Receiving server message of type " << static_cast<uint8_t>(data.type) << "\n";
 	switch (data.type) {
 	case ServerMessageEnum::Hello:
 		return buffer >> data.serverName >> data.playerCount >> data.sizeX >>

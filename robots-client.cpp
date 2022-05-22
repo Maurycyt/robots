@@ -71,13 +71,6 @@ namespace {
 
 		std::mutex variablesMutex;
 
-//		std::queue<DataInputMessage> inputMessages{};
-//		std::counting_semaphore<1> inputSemaphore{1};
-//		std::queue<DataServerMessage> serverMessages{};
-//		std::counting_semaphore<1> serverSemaphore{1};
-//
-//		std::counting_semaphore<65536> messageSemaphore{0};
-
 		GameState state{GameState::Lobby};
 
 		ClientVariables(int argc, char ** argv) {
