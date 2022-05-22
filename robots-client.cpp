@@ -132,6 +132,7 @@ namespace {
 	) {
 		static DataClientMessage outMessage;
 		if (variables.state == GameState::Lobby) {
+			std::cerr << "Something received.\n";
 			/* If GameStarted message not received, send Join. */
 			outMessage.type = ClientMessageEnum::Join;
 			outMessage.name.value =
@@ -140,12 +141,15 @@ namespace {
 			/* Otherwise, just forward the message, pretty much. */
 			switch (inMessage.type) {
 			case InputMessageEnum::PlaceBomb:
+				std::cerr << "Place bomb received.\n";
 				outMessage.type = ClientMessageEnum::PlaceBomb;
 				break;
 			case InputMessageEnum::PlaceBlock:
+				std::cerr << "Place block received.\n";
 				outMessage.type = ClientMessageEnum::PlaceBlock;
 				break;
 			case InputMessageEnum::Move:
+				std::cerr << "Move received.\n";
 				outMessage.type = ClientMessageEnum::Move;
 				outMessage.direction = inMessage.direction;
 				break;
@@ -163,6 +167,7 @@ namespace {
 
 		switch(inMessage.type) {
 		case ServerMessageEnum::Hello:
+			std::cerr << "Hello received.\n";
 			outMessage.serverName = inMessage.serverName;
 			outMessage.playerCount = inMessage.playerCount;
 			outMessage.sizeX = inMessage.sizeX;
@@ -172,15 +177,20 @@ namespace {
 			outMessage.bombTimer = inMessage.bombTimer;
 			break;
 		case ServerMessageEnum::AcceptedPlayer:
+			std::cerr << "Accepted player received.\n";
 			outMessage.players.map.insert({inMessage.playerID, inMessage.player});
 			break;
 		case ServerMessageEnum::GameStarted:
+			std::cerr << "Game started received.\n";
 			variables.state = GameState::Game;
 			outMessage.type = DrawMessageEnum::Game;
 			outMessage.players = inMessage.players;
 			break;
 		case ServerMessageEnum::Turn:
+			std::cerr << "Turn received.\n";
+			outMessage.turn = inMessage.turn;
 			for (const DataEvent & event : inMessage.events.list) {
+				std::cerr << "Reading next event...\n";
 				DataBomb bomb;
 				switch(event.type) {
 				case EventEnum::BombPlaced:
@@ -206,6 +216,7 @@ namespace {
 			}
 			break;
 		case ServerMessageEnum::GameEnded:
+			std::cerr << "Game ended received.\n";
 			variables.state = GameState::Lobby;
 			outMessage.type = DrawMessageEnum::Lobby;
 			outMessage.playerPositions.map.clear();

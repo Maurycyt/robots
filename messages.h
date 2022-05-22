@@ -373,6 +373,7 @@ public:
 	DataU16 bombTimer;
 	DataU8 playerID;
 	DataPlayer player;
+	DataU16 turn;
 	DataMap<DataU8, DataPlayer> players;
 	DataList<DataEvent> events;
 	DataMap<DataPlayer, DataU32> scores;
@@ -390,7 +391,7 @@ Buffer & operator<<(Buffer & buffer, const DataServerMessage & data) {
 	case ServerMessageEnum::GameStarted:
 		return buffer << data.players << bSend;
 	case ServerMessageEnum::Turn:
-		return buffer << data.events << bSend;
+		return buffer << data.turn << data.events << bSend;
 	case ServerMessageEnum::GameEnded:
 		return buffer << data.scores << bSend;
 	default:
@@ -415,7 +416,7 @@ Buffer & operator>>(Buffer & buffer, DataServerMessage & data) {
 	case ServerMessageEnum::GameStarted:
 		return buffer >> data.players;
 	case ServerMessageEnum::Turn:
-		return buffer >> data.events;
+		return buffer >> data.turn >> data.events;
 	case ServerMessageEnum::GameEnded:
 		return buffer >> data.scores;
 	default:
