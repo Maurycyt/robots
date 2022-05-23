@@ -23,4 +23,4 @@ clean:
 	rm -f robots-client robots-server *.o
 
 format:
-	clang-format -i -style=file *.h *.cpp
+	clang-format -i -style=file *.h *.cpp 2>/dev/null || echo "clang-format-14 or later is required."
