@@ -19,16 +19,15 @@
  */
 
 /* General class interface for structured data representation. */
-template <typename T>
-concept Data = requires(Buffer & buffer, T & t) {
-	               { buffer << t } -> std::same_as<Buffer &>;
-	               { buffer >> t } -> std::same_as<Buffer &>;
-               };
+template <typename T> concept Data = requires(Buffer & buffer, T & t) {
+	{ buffer << t } -> std::same_as<Buffer &>;
+	{ buffer >> t } -> std::same_as<Buffer &>;
+};
 
 template <typename T>
 concept ComparableData = Data<T> && requires(T & a, T & b) {
-	                                    { a < b } -> std::same_as<bool>;
-                                    };
+	{ a < b } -> std::same_as<bool>;
+};
 
 /* Integral leaf nodes for structured data representation. */
 class DataU8 {
@@ -126,6 +125,7 @@ Buffer & operator<<(Buffer & buffer, const DataList<T> & data) {
 
 template <Data T> Buffer & operator>>(Buffer & buffer, DataList<T> & data) {
 	size_t size = buffer.readU32();
+	data.list.clear();
 	for (size_t i = 0; i < size; i++) {
 		T t;
 		buffer >> t;
@@ -134,14 +134,14 @@ template <Data T> Buffer & operator>>(Buffer & buffer, DataList<T> & data) {
 	return buffer;
 }
 
-/* Internal set node for structured data representation. */
-template <ComparableData T> class DataMultiset {
+/* Internal multiset node for structured data representation. */
+template <ComparableData T> class DataSet {
 public:
-	std::multiset<T> set;
+	std::set<T> set;
 };
 
 template <ComparableData T>
-Buffer & operator<<(Buffer & buffer, const DataMultiset<T> & data) {
+Buffer & operator<<(Buffer & buffer, const DataSet<T> & data) {
 	buffer.writeU32((uint32_t)data.set.size());
 	for (const T & i : data.set) {
 		buffer << i;
@@ -149,12 +149,41 @@ Buffer & operator<<(Buffer & buffer, const DataMultiset<T> & data) {
 	return buffer;
 }
 
-template <ComparableData T> Buffer & operator>>(Buffer & buffer, DataMultiset<T> & data) {
+template <ComparableData T>
+Buffer & operator>>(Buffer & buffer, DataSet<T> & data) {
 	size_t size = buffer.readU32();
+	data.set.clear();
 	for (size_t i = 0; i < size; i++) {
 		T t;
 		buffer >> t;
 		data.set.insert(t);
+	}
+	return buffer;
+}
+
+/* Internal multiset node for structured data representation. */
+template <ComparableData T> class DataMultiset {
+public:
+	std::multiset<T> multiset;
+};
+
+template <ComparableData T>
+Buffer & operator<<(Buffer & buffer, const DataMultiset<T> & data) {
+	buffer.writeU32((uint32_t)data.multiset.size());
+	for (const T & i : data.multiset) {
+		buffer << i;
+	}
+	return buffer;
+}
+
+template <ComparableData T>
+Buffer & operator>>(Buffer & buffer, DataMultiset<T> & data) {
+	size_t size = buffer.readU32();
+	data.multiset.clear();
+	for (size_t i = 0; i < size; i++) {
+		T t;
+		buffer >> t;
+		data.multiset.insert(t);
 	}
 	return buffer;
 }
@@ -380,8 +409,6 @@ public:
 };
 
 Buffer & operator<<(Buffer & buffer, const DataClientMessage & data) {
-	std::cerr << "Sending client message of type "
-	          << (int)static_cast<uint8_t>(data.type) << "\n";
 	buffer.writeU8(static_cast<uint8_t>(data.type));
 	switch (data.type) {
 	case ClientMessageEnum::Join:
@@ -402,11 +429,11 @@ Buffer & operator>>(Buffer & buffer, DataClientMessage & data) {
 	data.type = static_cast<ClientMessageEnum>(enumValue);
 	switch (data.type) {
 	case ClientMessageEnum::Join:
-		return buffer >> data.name;
+		return buffer >> data.name >> bEnd;
 	case ClientMessageEnum::Move:
-		return buffer >> data.direction;
+		return buffer >> data.direction >> bEnd;
 	default:
-		return buffer;
+		return buffer >> bEnd;
 	}
 }
 
@@ -464,21 +491,19 @@ Buffer & operator>>(Buffer & buffer, DataServerMessage & data) {
 		throw BadType();
 	}
 	data.type = static_cast<ServerMessageEnum>(enumValue);
-	std::cerr << "Receiving server message of type "
-	          << (int)static_cast<uint8_t>(data.type) << "\n";
 	switch (data.type) {
 	case ServerMessageEnum::Hello:
 		return buffer >> data.serverName >> data.playerCount >> data.sizeX >>
 		       data.sizeY >> data.gameLength >> data.explosionRadius >>
-		       data.bombTimer;
+		       data.bombTimer >> bEnd;
 	case ServerMessageEnum::AcceptedPlayer:
-		return buffer >> data.playerID >> data.player;
+		return buffer >> data.playerID >> data.player >> bEnd;
 	case ServerMessageEnum::GameStarted:
-		return buffer >> data.players;
+		return buffer >> data.players >> bEnd;
 	case ServerMessageEnum::Turn:
-		return buffer >> data.turn >> data.events;
+		return buffer >> data.turn >> data.events >> bEnd;
 	case ServerMessageEnum::GameEnded:
-		return buffer >> data.scores;
+		return buffer >> data.scores >> bEnd;
 	default:
 		return buffer;
 	}
@@ -509,15 +534,13 @@ public:
 	DataU16 turn;
 	DataMap<DataU8, DataPlayer> players;
 	DataMap<DataU8, DataPosition> playerPositions;
-	DataMultiset<DataPosition> blocks;
+	DataSet<DataPosition> blocks;
 	DataList<DataBomb> bombs;
-	DataList<DataPosition> explosions;
+	DataSet<DataPosition> explosions;
 	DataMap<DataU8, DataU32> scores;
 };
 
 Buffer & operator<<(Buffer & buffer, const DataDrawMessage & data) {
-	std::cerr << "Sending draw message of type "
-	          << (int)static_cast<uint8_t>(data.type) << "\n";
 	buffer.writeU8(static_cast<uint8_t>(data.type));
 	switch (data.type) {
 	case DrawMessageEnum::Lobby:
@@ -545,12 +568,12 @@ Buffer & operator>>(Buffer & buffer, DataDrawMessage & data) {
 	case DrawMessageEnum::Lobby:
 		return buffer >> data.serverName >> data.playerCount >> data.sizeX >>
 		       data.sizeY >> data.gameLength >> data.explosionRadius >>
-		       data.bombTimer >> data.players;
+		       data.bombTimer >> data.players >> bEnd;
 	case DrawMessageEnum::Game:
 		return buffer >> data.serverName >> data.sizeX >> data.sizeY >>
 		       data.gameLength >> data.turn >> data.players >>
 		       data.playerPositions >> data.blocks >> data.bombs >>
-		       data.explosions >> data.scores;
+		       data.explosions >> data.scores >> bEnd;
 	default:
 		return buffer;
 	}
@@ -585,12 +608,10 @@ Buffer & operator>>(Buffer & buffer, DataInputMessage & data) {
 		throw BadType();
 	}
 	data.type = static_cast<InputMessageEnum>(enumValue);
-	std::cerr << "Receiving input message of type "
-	          << (int)static_cast<uint8_t>(data.type) << "\n";
 	switch (data.type) {
 	case InputMessageEnum::Move:
-		return buffer >> data.direction;
+		return buffer >> data.direction >> bEnd;
 	default:
-		return buffer;
+		return buffer >> bEnd;
 	}
 }

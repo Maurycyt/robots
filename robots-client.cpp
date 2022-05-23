@@ -1,9 +1,10 @@
 #include <boost/asio.hpp>
 #include <boost/program_options.hpp>
 #include <iostream>
-#include <unordered_map>
 #include <mutex>
+#include <semaphore>
 #include <thread>
+#include <unordered_map>
 
 #include "buffer.h"
 #include "messages.h"
@@ -46,8 +47,17 @@ namespace {
 		return options;
 	}
 
-	void throwInterrupt([[maybe_unused]] int signal) {
-		throw UnrecoverableException("\nInterrupted.\n");
+	/* Thread exception handling. */
+	std::exception_ptr exceptionPtr = nullptr;
+	std::binary_semaphore exceptionSemaphore{0};
+
+	void handleInterrupt([[maybe_unused]] int signal) {
+		try {
+			throw UnrecoverableException("\nInterrupted.\n");
+		} catch (UnrecoverableException & e) {
+			exceptionPtr = std::current_exception();
+			exceptionSemaphore.release();
+		}
 	}
 
 	enum class GameState {
@@ -69,9 +79,10 @@ namespace {
 		udp::socket GUISocket{clientContext};
 		tcp::socket serverSocket{clientContext};
 
+		/* Protection mostly for reading and writing to `state` member variable. */
 		std::mutex variablesMutex;
-
 		GameState state{GameState::Lobby};
+		std::string playerName;
 
 		ClientVariables(int argc, char ** argv) {
 			options = handleOptions(argc, argv);
@@ -86,9 +97,8 @@ namespace {
 			GUISocket = udp::socket(
 			    clientContext, udp::endpoint(udp::v6(), options["port"].as<port_t>())
 			);
-			std::cerr << "Trying connection with " << serverEndpoint << "\n";
 			serverSocket.connect(serverEndpoint);
-			std::cerr << "Connection succeeded!\n";
+			playerName = options["player-name"].as<std::string>();
 		}
 	};
 
@@ -97,24 +107,19 @@ namespace {
 	) {
 		static DataClientMessage outMessage;
 		if (variables.state == GameState::Lobby) {
-			std::cerr << "Something received.\n";
 			/* If GameStarted message not received, send Join. */
 			outMessage.type = ClientMessageEnum::Join;
-			outMessage.name.value =
-			    variables.options["player-name"].as<std::string>();
+			outMessage.name.value = variables.playerName;
 		} else {
 			/* Otherwise, just forward the message, pretty much. */
 			switch (inMessage.type) {
 			case InputMessageEnum::PlaceBomb:
-				std::cerr << "Place bomb received.\n";
 				outMessage.type = ClientMessageEnum::PlaceBomb;
 				break;
 			case InputMessageEnum::PlaceBlock:
-				std::cerr << "Place block received.\n";
 				outMessage.type = ClientMessageEnum::PlaceBlock;
 				break;
 			case InputMessageEnum::Move:
-				std::cerr << "Move received.\n";
 				outMessage.type = ClientMessageEnum::Move;
 				outMessage.direction = inMessage.direction;
 				break;
@@ -130,9 +135,10 @@ namespace {
 	) {
 		static DataDrawMessage outMessage;
 		static std::unordered_map<uint32_t, DataBomb> activeBombs;
-		static std::set<uint8_t> destroyedPlayers;
+		std::set<uint8_t> destroyedPlayers;
+		std::set<DataPosition> destroyedBlocks;
 
-		switch(inMessage.type) {
+		switch (inMessage.type) {
 		case ServerMessageEnum::Hello:
 			outMessage.serverName = inMessage.serverName;
 			outMessage.playerCount = inMessage.playerCount;
@@ -145,72 +151,118 @@ namespace {
 		case ServerMessageEnum::AcceptedPlayer:
 			outMessage.players.map.insert({inMessage.playerID, inMessage.player});
 			outMessage.scores.map.insert({inMessage.playerID, {0}});
-			outMessage.playerCount.value++;
 			break;
 		case ServerMessageEnum::GameStarted:
 			variables.state = GameState::Game;
 			outMessage.type = DrawMessageEnum::Game;
 			outMessage.players = inMessage.players;
+			outMessage.playerPositions.map.clear();
+			outMessage.blocks.set.clear();
+
 			break;
 		case ServerMessageEnum::Turn:
-			/* First, decrease counters on bombs and forget destroyed players. */
+			/* First, decrease counters on bombs and forget previous explosions. */
 			for (auto & entry : activeBombs) {
 				entry.second.timer.value--;
 			}
-			destroyedPlayers.clear();
+			outMessage.explosions.set.clear();
 
 			/* Then, process the events. */
 			outMessage.turn = inMessage.turn;
 			for (const DataEvent & event : inMessage.events.list) {
 				DataBomb bomb;
-				switch(event.type) {
+				DataPosition bombPosition;
+				uint16_t radius, leftX, rightX, lowY, highY;
+				switch (event.type) {
 				case EventEnum::BombPlaced:
 					bomb.position = event.position;
 					bomb.timer = inMessage.bombTimer;
 					activeBombs[event.bombID.value] = bomb;
 					break;
 				case EventEnum::BombExploded:
+					/* Get explosion bounds. */
+					bombPosition = activeBombs[event.bombID.value].position;
+					radius = outMessage.explosionRadius.value;
+					leftX = uint16_t(std::max(0, bombPosition.x.value - radius));
+					rightX = uint16_t(std::min(
+					    outMessage.sizeX.value - 1, bombPosition.x.value + radius
+					));
+					lowY = uint16_t(std::max(0, bombPosition.y.value - radius));
+					highY = uint16_t(std::min(
+					    outMessage.sizeY.value - 1, bombPosition.y.value + radius
+					));
+					/* Add explosions. */
+					for (int x = bombPosition.x.value; x >= int(leftX); x--) {
+						DataPosition explosion = {{uint16_t(x)}, bombPosition.y};
+						outMessage.explosions.set.insert(explosion);
+						if (outMessage.blocks.set.contains(explosion)) {
+							break;
+						}
+					}
+					for (int x = bombPosition.x.value; x <= int(rightX); x++) {
+						DataPosition explosion = {{uint16_t(x)}, bombPosition.y};
+						outMessage.explosions.set.insert(explosion);
+						if (outMessage.blocks.set.contains(explosion)) {
+							break;
+						}
+					}
+					for (int y = bombPosition.y.value; y >= int(lowY); y--) {
+						DataPosition explosion = {bombPosition.x, {uint16_t(y)}};
+						outMessage.explosions.set.insert(explosion);
+						if (outMessage.blocks.set.contains(explosion)) {
+							break;
+						}
+					}
+					for (int y = bombPosition.y.value; y <= int(highY); y++) {
+						DataPosition explosion = {bombPosition.x, {uint16_t(y)}};
+						outMessage.explosions.set.insert(explosion);
+						if (outMessage.blocks.set.contains(explosion)) {
+							break;
+						}
+					}
+					/* Remove bomb from active bombs. */
 					activeBombs.erase(event.bombID.value);
+					/* Save destroyed players. */
 					for (const DataU8 & playerID : event.playersDestroyed.list) {
 						destroyedPlayers.insert(playerID.value);
 					}
+					/* Save destroyed blocks. */
 					for (const DataPosition & block : event.blocksDestroyed.list) {
-						outMessage.blocks.set.erase(block);
+						destroyedBlocks.insert(block);
 					}
 					break;
 				case EventEnum::PlayerMoved:
 					outMessage.playerPositions.map[event.playerID] = event.position;
 					break;
 				case EventEnum::BlockPlaced:
-					if (!outMessage.blocks.set.contains(event.position)) {
-						outMessage.blocks.set.insert(event.position); //TODO: add set?
-					}
+					outMessage.blocks.set.insert(event.position);
 					break;
 				default:
 					break;
 				}
 			}
 
-			/* Finally, copy new values to the list of bombs and update scores. */
+			/* Finally, copy new values to the list of bombs. */
 			outMessage.bombs.list.clear();
 			for (auto & entry : activeBombs) {
 				outMessage.bombs.list.push_back(entry.second);
 			}
-			for (auto & entry : outMessage.scores.map) {
-				if (!destroyedPlayers.contains(entry.first.value)) {
-					entry.second.value++;
-				}
+			/* Update scores and blocks */
+			for (uint8_t playerID : destroyedPlayers) {
+				outMessage.scores.map[{playerID}].value++;
+			}
+			for (const DataPosition & block : destroyedBlocks) {
+				outMessage.blocks.set.erase(block);
 			}
 			break;
 		case ServerMessageEnum::GameEnded:
-			std::cerr << "Game ended received.\n";
 			variables.state = GameState::Lobby;
 			activeBombs.clear();
 			outMessage.type = DrawMessageEnum::Lobby;
 			outMessage.playerPositions.map.clear();
 			outMessage.blocks.set.clear();
 			outMessage.bombs.list.clear();
-//			outMessage.scores = inMessage.scores;
+			outMessage.scores = inMessage.scores;
 			break;
 		default:
 			break;
@@ -219,37 +271,45 @@ namespace {
 		return outMessage;
 	}
 
-	[[noreturn]] void listenToGUI(ClientVariables & variables) {
-		UDPBuffer GUIBufferIn(variables.GUISocket, variables.GUIEndpoint);
-		TCPBuffer serverBufferOut(variables.serverSocket);
-		DataInputMessage inMessage;
+	void listenToGUI(ClientVariables & variables) {
+		try {
+			UDPBuffer GUIBufferIn(variables.GUISocket, variables.GUIEndpoint);
+			TCPBuffer serverBufferOut(variables.serverSocket);
+			DataInputMessage inMessage;
 
-		while (true) {
-			try {
-				GUIBufferIn >> inMessage;
-			} catch (BadRead & e) {
-				continue;
-			} catch (BadType & e) {
-				continue;
+			while (true) {
+				try {
+					GUIBufferIn >> inMessage;
+				} catch (BadRead & e) {
+					continue;
+				} catch (BadType & e) {
+					continue;
+				}
+
+				std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
+				serverBufferOut << processInputMessage(variables, inMessage);
 			}
-
-			std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
-
-			serverBufferOut << processInputMessage(variables, inMessage);
+		} catch (std::exception & e) {
+			exceptionPtr = std::current_exception();
+			exceptionSemaphore.release();
 		}
 	}
 
-	[[noreturn]] void listenToServer(ClientVariables & variables) {
-		TCPBuffer serverBufferIn(variables.serverSocket);
-		UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
-		DataServerMessage inMessage;
+	void listenToServer(ClientVariables & variables) {
+		try {
+			TCPBuffer serverBufferIn(variables.serverSocket);
+			UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
+			DataServerMessage inMessage;
 
-		while (true) {
-			serverBufferIn >> inMessage;
+			while (true) {
+				serverBufferIn >> inMessage;
 
-			std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
-
-			GUIBufferOut << processServerMessage(variables, inMessage);
+				std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
+				GUIBufferOut << processServerMessage(variables, inMessage);
+			}
+		} catch (std::exception & e) {
+			exceptionPtr = std::current_exception();
+			exceptionSemaphore.release();
 		}
 	}
 } // namespace
@@ -258,20 +318,26 @@ int main(int argc, char ** argv) {
 	try {
 		/* Install SIGINT handler, prepare options, endpoints, sockets, buffers, and
 		 * message queues. Save all to a ClientVariables class. */
-		installSignalHandler(SIGINT, throwInterrupt, SA_RESTART);
+		installSignalHandler(SIGINT, handleInterrupt, SA_RESTART);
 		ClientVariables variables{argc, argv};
 
+		std::cout << "Connected to server at " << variables.serverEndpoint << ".\n";
+		std::cout << "Sending to GUI at " << variables.GUIEndpoint << ".\n";
+		std::cout << "Listening to GUI at port "
+		          << variables.options["port"].as<port_t>() << ".\n";
+
+		/* Main loops. */
 		std::thread GUIListener(listenToGUI, std::ref(variables));
 		std::thread serverListener(listenToServer, std::ref(variables));
 
-		std::cout << "Server address: " << variables.serverEndpoint
-		          << "\nGUI address: " << variables.GUIEndpoint
-		          << "\nListening on port "
-		          << variables.options["port"].as<port_t>() << "\n";
-
-		/* Main loop. */
-		GUIListener.join();
-		serverListener.join();
+		/* Listen for exceptions. */
+		exceptionSemaphore.acquire();
+		GUIListener.detach();
+		serverListener.detach();
+		std::rethrow_exception(exceptionPtr);
+		/* Some resources may be leaked in the case of exceptions other than
+		 * NeedHelp, but we are terminating the program with an unrecoverable
+		 * exception anyway. This is meant to handle the output neatly. */
 
 	} catch (NeedHelp & e) {
 		/* Exception reserved for --help option. */

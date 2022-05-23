@@ -1,3 +1,5 @@
+# Requires clang-format-14 or later.
+
 # Pointers and references
 PointerAlignment: Middle
 

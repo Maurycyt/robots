@@ -19,7 +19,7 @@ extractHostAndPort(const std::string & address) {
 }
 
 void installSignalHandler(int signal, void (*handler)(int), int flags) {
-	struct sigaction action{};
+	struct sigaction action {};
 	sigset_t blockMask;
 
 	sigemptyset(&blockMask);
@@ -38,10 +38,11 @@ requires(
      std::same_as<R, boost::asio::ip::udp::resolver>) ||
     (std::same_as<E, boost::asio::ip::tcp::endpoint> &&
      std::same_as<R, boost::asio::ip::tcp::resolver>)
-)
-E resolveAddress(
-    R & resolver, const std::string & address, const std::string & programName
-) {
+) E
+    resolveAddress(
+        R & resolver, const std::string & address,
+        const std::string & programName
+    ) {
 	try {
 		auto [addressStr, portStr] = extractHostAndPort(address);
 		return *resolver.resolve(addressStr, portStr);

@@ -10,15 +10,22 @@
 /*
  * Dummy classes to force receival or sending of list to and from the buffer.
  * Similar to std::flush in iostream.
+ *
+ * BufferEncourageReceive and BufferEnsureEnd are meaningless for TCPBuffer.
+ * BufferEnsureEnd is used to make sure the whole UDP datagram was parsed.
  */
 
-class BufferForceReceive {};
+class BufferEncourageReceive {};
 
-class BufferForceSend {};
+class BufferEncourageSend {};
 
-BufferForceReceive bReceive;
+class BufferEnsureEnd {};
 
-BufferForceSend bSend;
+BufferEncourageReceive bReceive;
+
+BufferEncourageSend bSend;
+
+BufferEnsureEnd bEnd;
 
 /*
  * =============================================================================
@@ -52,6 +59,8 @@ protected:
 	virtual void push(size_t bytes) = 0;
 
 	virtual void receive([[maybe_unused]] size_t bytes) = 0;
+
+	virtual void ensureEnd() = 0;
 
 	virtual void send() = 0;
 
@@ -125,12 +134,17 @@ public:
 		return result;
 	}
 
-	Buffer & operator>>([[maybe_unused]] const BufferForceReceive & rec) {
+	Buffer & operator>>([[maybe_unused]] const BufferEncourageReceive & ber) {
 		receive(0);
 		return *this;
 	}
 
-	Buffer & operator<<([[maybe_unused]] const BufferForceSend & rec) {
+	Buffer & operator>>([[maybe_unused]] const BufferEnsureEnd & bee) {
+		ensureEnd();
+		return *this;
+	}
+
+	Buffer & operator<<([[maybe_unused]] const BufferEncourageSend & bes) {
 		send();
 		return *this;
 	}
@@ -150,6 +164,12 @@ private:
 	void receive([[maybe_unused]] size_t bytes) override {
 		clear();
 		right = socket.receive(boost::asio::buffer(buffer, size));
+	}
+
+	void ensureEnd() override {
+		if (left != right) {
+			throw BadRead();
+		}
 	}
 
 	void send() override {
@@ -202,6 +222,9 @@ private:
 		right += bytes;
 	}
 
+	void ensureEnd() override {
+	}
+
 	void send() override {
 		if (right - left == 0) {
 			return;
@@ -223,7 +246,6 @@ public:
 	 * the received-but-not-read bytes to the beginning and then receiving.
 	 */
 	void pull(const size_t bytes) override {
-//		std::cerr << "Pulling " << bytes << " bytes.\n";
 		if (left + bytes > size) {
 			memmove(buffer, buffer + left, right - left);
 			right -= left;
@@ -235,7 +257,6 @@ public:
 	}
 
 	void push(const size_t bytes) override {
-//		std::cerr << "Pushing " << bytes << " bytes.\n";
 		if (right + bytes > size) {
 			send();
 		}
