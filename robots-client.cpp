@@ -2,7 +2,7 @@
 #include <boost/program_options.hpp>
 #include <iostream>
 #include <mutex>
-#include <semaphore>
+#include <condition_variable>
 #include <thread>
 #include <unordered_map>
 
@@ -49,14 +49,18 @@ namespace {
 
 	/* Thread exception handling. */
 	std::exception_ptr exceptionPtr = nullptr;
-	std::binary_semaphore exceptionSemaphore{0};
+	std::mutex exceptionMutex;
+	std::condition_variable exceptionCV;
 
 	void handleInterrupt([[maybe_unused]] int signal) {
 		try {
 			throw UnrecoverableException("\nInterrupted.\n");
 		} catch (UnrecoverableException & e) {
-			exceptionPtr = std::current_exception();
-			exceptionSemaphore.release();
+			{
+				std::lock_guard<std::mutex> guard(exceptionMutex);
+				exceptionPtr = std::current_exception();
+			}
+			exceptionCV.notify_one();
 		}
 	}
 
@@ -290,8 +294,11 @@ namespace {
 				serverBufferOut << processInputMessage(variables, inMessage);
 			}
 		} catch (std::exception & e) {
-			exceptionPtr = std::current_exception();
-			exceptionSemaphore.release();
+			{
+				std::lock_guard<std::mutex> guard(exceptionMutex);
+				exceptionPtr = std::current_exception();
+			}
+			exceptionCV.notify_one();
 		}
 	}
 
@@ -308,8 +315,11 @@ namespace {
 				GUIBufferOut << processServerMessage(variables, inMessage);
 			}
 		} catch (std::exception & e) {
-			exceptionPtr = std::current_exception();
-			exceptionSemaphore.release();
+			{
+				std::lock_guard<std::mutex> guard(exceptionMutex);
+				exceptionPtr = std::current_exception();
+			}
+			exceptionCV.notify_one();
 		}
 	}
 } // namespace
@@ -331,13 +341,16 @@ int main(int argc, char ** argv) {
 		std::thread serverListener(listenToServer, std::ref(variables));
 
 		/* Listen for exceptions. */
-		exceptionSemaphore.acquire();
+		std::unique_lock<std::mutex> guard(exceptionMutex);
+		exceptionCV.wait(guard, []{return exceptionPtr != nullptr;});
 		GUIListener.detach();
 		serverListener.detach();
 		std::rethrow_exception(exceptionPtr);
 		/* Some resources may be leaked in the case of exceptions other than
 		 * NeedHelp, but we are terminating the program with an unrecoverable
-		 * exception anyway. This is meant to handle the output neatly. */
+		 * exception anyway. The "still reachable" and "possibly lost" values
+		 * are caused by terminating threads.
+		 * This is only meant to handle the output neatly. */
 
 	} catch (NeedHelp & e) {
 		/* Exception reserved for --help option. */

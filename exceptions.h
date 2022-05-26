@@ -6,28 +6,28 @@
 /* Exception thrown when parsing a variant message type goes wrong. */
 class BadType : public std::exception {
 	[[nodiscard]] const char * what() const noexcept override {
-		return "message type resolution failed.";
+		return "Error: message type resolution failed.";
 	}
 };
 
 /* Exception thrown when writing exceeds buffer capacity. */
 class BadWrite : public std::exception {
 	[[nodiscard]] const char * what() const noexcept override {
-		return "not enough buffer space to write to.";
+		return "Error: not enough buffer space to write to.";
 	}
 };
 
 /* Exception thrown when writing exceeds buffer capacity. */
 class BadRead : public std::exception {
 	[[nodiscard]] const char * what() const noexcept override {
-		return "not enough buffered list to read from.";
+		return "Error: not enough buffered list to read from.";
 	}
 };
 
 /* Exception thrown when user requests help message. */
 class NeedHelp : public std::exception {
 	[[nodiscard]] const char * what() const noexcept override {
-		return "user requested for help message.";
+		return "Error: user requested for help message.";
 	}
 };
 
