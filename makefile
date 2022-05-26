@@ -1,7 +1,7 @@
-CXX = g++-11
+CXX = g++
 CXX_FLAGS = -g -std=gnu++20 -Wall -Wextra -Wconversion -Wshadow -Werror -O2
 LINKS = -lboost_program_options -pthread
-HEADERS = utils.h options.h buffer.h messages.h
+HEADERS = exceptions.h utils.h options.h buffer.h messages.h
 
 .PHONY: all clean format
 

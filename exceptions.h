@@ -3,34 +3,6 @@
 #include <exception>
 #include <utility>
 
-/* Exception thrown when parsing a variant message type goes wrong. */
-class BadType : public std::exception {
-	[[nodiscard]] const char * what() const noexcept override {
-		return "Error: message type resolution failed.";
-	}
-};
-
-/* Exception thrown when writing exceeds buffer capacity. */
-class BadWrite : public std::exception {
-	[[nodiscard]] const char * what() const noexcept override {
-		return "Error: not enough buffer space to write to.";
-	}
-};
-
-/* Exception thrown when writing exceeds buffer capacity. */
-class BadRead : public std::exception {
-	[[nodiscard]] const char * what() const noexcept override {
-		return "Error: not enough buffered list to read from.";
-	}
-};
-
-/* Exception thrown when user requests help message. */
-class NeedHelp : public std::exception {
-	[[nodiscard]] const char * what() const noexcept override {
-		return "Error: user requested for help message.";
-	}
-};
-
 class UnrecoverableException : public std::exception {
 private:
 	std::string message;
@@ -42,5 +14,37 @@ public:
 
 	[[nodiscard]] const char * what() const noexcept override {
 		return message.c_str();
+	}
+};
+
+/* Exception thrown when parsing a variant message type goes wrong. */
+class BadType : public UnrecoverableException {
+public:
+	BadType() :
+	    UnrecoverableException("Error: message type resolution failed.\n") {
+	}
+};
+
+/* Exception thrown when writing exceeds buffer capacity. */
+class BadWrite : public UnrecoverableException {
+public:
+	BadWrite() :
+	    UnrecoverableException("Error: not enough buffer space to write to.\n") {
+	}
+};
+
+/* Exception thrown when writing exceeds buffer capacity. */
+class BadRead : public UnrecoverableException {
+public:
+	BadRead() :
+	    UnrecoverableException("Error: not enough buffered list to read from.\n"
+	    ) {
+	}
+};
+
+/* Exception thrown when user requests help message. */
+class NeedHelp : public std::exception {
+	[[nodiscard]] const char * what() const noexcept override {
+		return "Info: user requested for help message.\n";
 	}
 };

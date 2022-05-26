@@ -1,8 +1,8 @@
 #include <boost/asio.hpp>
 #include <boost/program_options.hpp>
+#include <condition_variable>
 #include <iostream>
 #include <mutex>
-#include <condition_variable>
 #include <thread>
 #include <unordered_map>
 
@@ -90,6 +90,7 @@ namespace {
 
 		ClientVariables(int argc, char ** argv) {
 			options = handleOptions(argc, argv);
+			playerName = options["player-name"].as<std::string>();
 			GUIEndpoint = resolveAddress<udp::endpoint, udp::resolver>(
 			    UDPResolver, options["gui-address"].as<std::string>(),
 			    std::string(argv[0])
@@ -101,8 +102,11 @@ namespace {
 			GUISocket = udp::socket(
 			    clientContext, udp::endpoint(udp::v6(), options["port"].as<port_t>())
 			);
-			serverSocket.connect(serverEndpoint);
-			playerName = options["player-name"].as<std::string>();
+			try {
+				serverSocket.connect(serverEndpoint);
+			} catch (std::exception & e) {
+				throw UnrecoverableException("Error: " + std::string(e.what()) + "\n");
+			}
 		}
 	};
 
@@ -162,6 +166,10 @@ namespace {
 			outMessage.players = inMessage.players;
 			outMessage.playerPositions.map.clear();
 			outMessage.blocks.set.clear();
+			outMessage.scores.map.clear();
+			for (auto & player : outMessage.players.map) {
+				outMessage.scores.map[player.first] = {0};
+			}
 
 			break;
 		case ServerMessageEnum::Turn:
@@ -312,7 +320,11 @@ namespace {
 				serverBufferIn >> inMessage;
 
 				std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
-				GUIBufferOut << processServerMessage(variables, inMessage);
+				const DataDrawMessage & outMessage =
+				    processServerMessage(variables, inMessage);
+				if (inMessage.type != ServerMessageEnum::GameStarted) {
+					GUIBufferOut << outMessage;
+				}
 			}
 		} catch (std::exception & e) {
 			{
@@ -325,44 +337,68 @@ namespace {
 } // namespace
 
 int main(int argc, char ** argv) {
+	std::shared_ptr<ClientVariables> variables;
 	try {
-		/* Install SIGINT handler, prepare options, endpoints, sockets, buffers, and
-		 * message queues. Save all to a ClientVariables class. */
-		installSignalHandler(SIGINT, handleInterrupt, SA_RESTART);
-		ClientVariables variables{argc, argv};
-
-		std::cout << "Connected to server at " << variables.serverEndpoint << ".\n";
-		std::cout << "Sending to GUI at " << variables.GUIEndpoint << ".\n";
-		std::cout << "Listening to GUI at port "
-		          << variables.options["port"].as<port_t>() << ".\n";
-
-		/* Main loops. */
-		std::thread GUIListener(listenToGUI, std::ref(variables));
-		std::thread serverListener(listenToServer, std::ref(variables));
-
-		/* Listen for exceptions. */
-		std::unique_lock<std::mutex> guard(exceptionMutex);
-		exceptionCV.wait(guard, []{return exceptionPtr != nullptr;});
-		GUIListener.detach();
-		serverListener.detach();
-		std::rethrow_exception(exceptionPtr);
-		/* Some resources may be leaked in the case of exceptions other than
-		 * NeedHelp, but we are terminating the program with an unrecoverable
-		 * exception anyway. The "still reachable" and "possibly lost" values
-		 * are caused by terminating threads.
-		 * This is only meant to handle the output neatly. */
-
+		variables = std::make_shared<ClientVariables>(argc, argv);
 	} catch (NeedHelp & e) {
 		/* Exception reserved for --help option. */
 		std::cout << getClientOptionsDescription();
 		return 0;
 	} catch (UnrecoverableException & e) {
-		/* Something went wrong, we know what it is and cannot recover from it. */
+		/* Something went wrong, we know what it is and cannot recover from it, but
+		 * do not have to halt the other threads, because there are no threads. */
 		std::cerr << e.what();
 		return 1;
-	} catch (std::exception & e) {
-		/* Something went wrong and we were not prepared. This is bad. */
-		std::cerr << e.what() << "\n";
-		return 2;
+	}
+
+	/* Install SIGINT handler, prepare options, endpoints, sockets, buffers,
+	 * and message queues. Save all to a ClientVariables class. */
+	installSignalHandler(SIGINT, handleInterrupt, SA_RESTART);
+
+	std::stringstream connectionsInfo;
+	connectionsInfo << "Connected to server at " << variables->serverEndpoint
+	                << ".\nSending to GUI at " << variables->GUIEndpoint
+	                << ".\nListening to GUI on port "
+	                << variables->options["port"].as<port_t>() << ".\n";
+	debug(connectionsInfo.str());
+
+	/* Main loops. */
+	std::shared_ptr<std::thread> GUIListener;
+	std::shared_ptr<std::thread> serverListener;
+
+	try {
+		GUIListener =
+		    std::make_shared<std::thread>(listenToGUI, std::ref(*variables));
+		serverListener =
+		    std::make_shared<std::thread>(listenToServer, std::ref(*variables));
+
+		/* Listen for exceptions. */
+		std::unique_lock<std::mutex> guard(exceptionMutex);
+		exceptionCV.wait(guard, [] {
+			return exceptionPtr != nullptr;
+		});
+		std::rethrow_exception(exceptionPtr);
+		/* We notify the other threads that the program cannot continue running, and
+		 * collect all resources to avoid memory leaks. */
+
+	} catch (UnrecoverableException & e) {
+		/* Something went wrong, we know what it is and cannot recover from it.
+		 * Close the other threads by forcing exceptions in them. */
+		try {
+			variables->GUISocket.shutdown(udp::socket::shutdown_both);
+		} catch (boost::wrapexcept<boost::system::system_error> & f) {
+			// OK
+		}
+		try {
+			variables->serverSocket.shutdown(tcp::socket::shutdown_both);
+		} catch (boost::wrapexcept<boost::system::system_error> & f) {
+			// OK
+		}
+		variables->GUISocket.close();
+		variables->serverSocket.close();
+		GUIListener->join();
+		serverListener->join();
+		debug(std::string(e.what()));
+		return 1;
 	}
 }

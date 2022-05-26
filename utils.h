@@ -3,6 +3,12 @@
 #include <boost/asio.hpp>
 #include <cstdint>
 
+#ifdef NDEBUG
+const bool DEBUG = false;
+#else
+const bool DEBUG = true;
+#endif
+
 using port_t = uint16_t;
 
 std::pair<std::string, std::string>
@@ -28,7 +34,7 @@ void installSignalHandler(int signal, void (*handler)(int), int flags) {
 	action.sa_flags = flags;
 
 	if (sigaction(signal, &action, nullptr)) {
-		throw UnrecoverableException("could not install SIGINT handler.");
+		throw UnrecoverableException("Error: could not install SIGINT handler.");
 	}
 }
 
@@ -51,5 +57,11 @@ requires(
 		    "Error: " + std::string(e.what()) + "\nRun " + programName +
 		    " --help for usage.\n"
 		);
+	}
+}
+
+void debug(const std::string & message) {
+	if (DEBUG) {
+		std::cerr << message;
 	}
 }
