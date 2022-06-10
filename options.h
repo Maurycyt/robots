@@ -25,7 +25,7 @@ getClientOptionsDescription() {
 	}
 
 	return clientOptionsDescription;
-};
+}
 
 const boost::program_options::options_description &
 getServerOptionsDescription() {
@@ -38,8 +38,8 @@ getServerOptionsDescription() {
 		    "help,h", "Display this help message"
 		)("bomb-timer,b", value<uint16_t>()->required(),
 		  "The number of turns after which a bomb explodes"
-		)("players-count,c", value<uint8_t>()->required(), "The number of players"
-		)("turn-duration,t", value<uint64_t>()->required(),
+		)("players-count,c", value<uint16_t>()->required(), "The number of players"
+		)("turn-duration,d", value<uint64_t>()->required(),
 		  "The duration of one turn in milliseconds"
 		)("explosion-radius,e", value<uint16_t>()->required(),
 		  "The radius of explosions"
@@ -51,7 +51,7 @@ getServerOptionsDescription() {
 		  "The name of the server"
 		)("port,p", value<port_t>()->required(),
 		  "The port on which the server will be listening"
-		)("seed,s", value<uint32_t>()->default_value(0),
+		)("seed,s", value<uint32_t>()->default_value(uint32_t(std::chrono::system_clock::now().time_since_epoch().count())),
 		  "The seed to be used during randomization (default is 0)"
 		)("size-x,x", value<uint16_t>()->required(),
 		  "The horizontal size of the board"
@@ -62,7 +62,7 @@ getServerOptionsDescription() {
 	}
 
 	return serverOptionsDescription;
-};
+}
 
 boost::program_options::variables_map parseOptions(
     int argc, char ** argv,
@@ -83,4 +83,38 @@ boost::program_options::variables_map parseOptions(
 void notifyOptions(boost::program_options::variables_map & options) {
 	/* Finalize argument parsing, prepare argument values. */
 	boost::program_options::notify(options);
+}
+
+boost::program_options::variables_map handleOptions(
+    int argc, char ** argv,
+    const boost::program_options::options_description & optionsDescription
+) {
+	boost::program_options::variables_map options;
+	/* Parse options. Check argument validity. */
+	try {
+		options = parseOptions(argc, argv, optionsDescription);
+	} catch (std::exception & e) {
+		throw RobotsException(
+		    "Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) +
+		    " --help for usage.\n"
+		);
+	}
+
+	/* Print help message if requested. */
+	if (options.contains("help")) {
+		throw NeedHelp();
+	}
+
+	/* Finalize parsing, prepare argument values, including checking the
+	 * existence of required arguments. */
+	try {
+		notifyOptions(options);
+	} catch (std::exception & e) {
+		throw RobotsException(
+		    "Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) +
+		    " --help for usage.\n"
+		);
+	}
+
+	return options;
 }

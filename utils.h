@@ -1,6 +1,7 @@
 #pragma once
 
 #include <boost/asio.hpp>
+#include <chrono>
 #include <cstdint>
 
 #ifdef NDEBUG
@@ -34,7 +35,7 @@ void installSignalHandler(int signal, void (*handler)(int), int flags) {
 	action.sa_flags = flags;
 
 	if (sigaction(signal, &action, nullptr)) {
-		throw UnrecoverableException("Error: could not install SIGINT handler.");
+		throw RobotsException("Error: could not install SIGINT handler.");
 	}
 }
 
@@ -53,7 +54,7 @@ requires(
 		auto [addressStr, portStr] = extractHostAndPort(address);
 		return *resolver.resolve(addressStr, portStr);
 	} catch (std::exception & e) {
-		throw UnrecoverableException(
+		throw RobotsException(
 		    "Error: " + std::string(e.what()) + "\nRun " + programName +
 		    " --help for usage.\n"
 		);
@@ -65,3 +66,23 @@ void debug(const std::string & message) {
 		std::cerr << message;
 	}
 }
+
+class Random {
+	static const uint64_t constant = 48271;
+	static const uint64_t modulo = (1ULL << 31) - 1; // 2147483647
+
+	uint64_t seed;
+
+public:
+	Random() : seed(static_cast<uint64_t>(
+	        std::chrono::system_clock::now().time_since_epoch().count()
+	    )) {
+	}
+
+	explicit Random(uint64_t newSeed) : seed(newSeed) {
+	}
+
+	uint64_t next() {
+		return (seed = seed * constant % modulo);
+	}
+};

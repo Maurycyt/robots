@@ -161,33 +161,6 @@ Buffer & operator>>(Buffer & buffer, DataSet<T> & data) {
 	return buffer;
 }
 
-/* Internal multiset node for structured data representation. */
-template <ComparableData T> class DataMultiset {
-public:
-	std::multiset<T> multiset;
-};
-
-template <ComparableData T>
-Buffer & operator<<(Buffer & buffer, const DataMultiset<T> & data) {
-	buffer.writeU32((uint32_t)data.multiset.size());
-	for (const T & i : data.multiset) {
-		buffer << i;
-	}
-	return buffer;
-}
-
-template <ComparableData T>
-Buffer & operator>>(Buffer & buffer, DataMultiset<T> & data) {
-	size_t size = buffer.readU32();
-	data.multiset.clear();
-	for (size_t i = 0; i < size; i++) {
-		T t;
-		buffer >> t;
-		data.multiset.insert(t);
-	}
-	return buffer;
-}
-
 /* Internal map node for structured data representation. */
 template <ComparableData K, Data V> class DataMap {
 public:
@@ -215,6 +188,11 @@ Buffer & operator>>(Buffer & buffer, DataMap<K, V> & data) {
 	}
 	return buffer;
 }
+
+enum class GameState {
+	Lobby,
+	Game
+};
 
 /*
  * =============================================================================
@@ -412,16 +390,16 @@ Buffer & operator<<(Buffer & buffer, const DataClientMessage & data) {
 	buffer.writeU8(static_cast<uint8_t>(data.type));
 	switch (data.type) {
 	case ClientMessageEnum::Join:
-		return buffer << data.name << bSend;
+		return buffer << data.name << Buffer::eSend;
 	case ClientMessageEnum::Move:
-		return buffer << data.direction << bSend;
+		return buffer << data.direction << Buffer::eSend;
 	default:
-		return buffer << bSend;
+		return buffer << Buffer::eSend;
 	}
 }
 
 Buffer & operator>>(Buffer & buffer, DataClientMessage & data) {
-	buffer >> bReceive;
+	buffer >> Buffer::eReceive;
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 3) {
 		throw BadType();
@@ -429,11 +407,11 @@ Buffer & operator>>(Buffer & buffer, DataClientMessage & data) {
 	data.type = static_cast<ClientMessageEnum>(enumValue);
 	switch (data.type) {
 	case ClientMessageEnum::Join:
-		return buffer >> data.name >> bEnd;
+		return buffer >> data.name >> Buffer::eEnd;
 	case ClientMessageEnum::Move:
-		return buffer >> data.direction >> bEnd;
+		return buffer >> data.direction >> Buffer::eEnd;
 	default:
-		return buffer >> bEnd;
+		return buffer >> Buffer::eEnd;
 	}
 }
 
@@ -470,22 +448,22 @@ Buffer & operator<<(Buffer & buffer, const DataServerMessage & data) {
 	case ServerMessageEnum::Hello:
 		return buffer << data.serverName << data.playerCount << data.sizeX
 		              << data.sizeY << data.gameLength << data.explosionRadius
-		              << data.bombTimer << bSend;
+		              << data.bombTimer << Buffer::eSend;
 	case ServerMessageEnum::AcceptedPlayer:
-		return buffer << data.playerID << data.player << bSend;
+		return buffer << data.playerID << data.player << Buffer::eSend;
 	case ServerMessageEnum::GameStarted:
-		return buffer << data.players << bSend;
+		return buffer << data.players << Buffer::eSend;
 	case ServerMessageEnum::Turn:
-		return buffer << data.turn << data.events << bSend;
+		return buffer << data.turn << data.events << Buffer::eSend;
 	case ServerMessageEnum::GameEnded:
-		return buffer << data.scores << bSend;
+		return buffer << data.scores << Buffer::eSend;
 	default:
 		return buffer;
 	}
 }
 
 Buffer & operator>>(Buffer & buffer, DataServerMessage & data) {
-	buffer >> bReceive;
+	buffer >> Buffer::eReceive;
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 4) {
 		throw BadType();
@@ -495,15 +473,15 @@ Buffer & operator>>(Buffer & buffer, DataServerMessage & data) {
 	case ServerMessageEnum::Hello:
 		return buffer >> data.serverName >> data.playerCount >> data.sizeX >>
 		       data.sizeY >> data.gameLength >> data.explosionRadius >>
-		       data.bombTimer >> bEnd;
+		       data.bombTimer >> Buffer::eEnd;
 	case ServerMessageEnum::AcceptedPlayer:
-		return buffer >> data.playerID >> data.player >> bEnd;
+		return buffer >> data.playerID >> data.player >> Buffer::eEnd;
 	case ServerMessageEnum::GameStarted:
-		return buffer >> data.players >> bEnd;
+		return buffer >> data.players >> Buffer::eEnd;
 	case ServerMessageEnum::Turn:
-		return buffer >> data.turn >> data.events >> bEnd;
+		return buffer >> data.turn >> data.events >> Buffer::eEnd;
 	case ServerMessageEnum::GameEnded:
-		return buffer >> data.scores >> bEnd;
+		return buffer >> data.scores >> Buffer::eEnd;
 	default:
 		return buffer;
 	}
@@ -546,19 +524,19 @@ Buffer & operator<<(Buffer & buffer, const DataDrawMessage & data) {
 	case DrawMessageEnum::Lobby:
 		return buffer << data.serverName << data.playerCount << data.sizeX
 		              << data.sizeY << data.gameLength << data.explosionRadius
-		              << data.bombTimer << data.players << bSend;
+		              << data.bombTimer << data.players << Buffer::eSend;
 	case DrawMessageEnum::Game:
 		return buffer << data.serverName << data.sizeX << data.sizeY
 		              << data.gameLength << data.turn << data.players
 		              << data.playerPositions << data.blocks << data.bombs
-		              << data.explosions << data.scores << bSend;
+		              << data.explosions << data.scores << Buffer::eSend;
 	default:
 		return buffer;
 	}
 }
 
 Buffer & operator>>(Buffer & buffer, DataDrawMessage & data) {
-	buffer >> bReceive;
+	buffer >> Buffer::eReceive;
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 1) {
 		throw BadType();
@@ -568,12 +546,12 @@ Buffer & operator>>(Buffer & buffer, DataDrawMessage & data) {
 	case DrawMessageEnum::Lobby:
 		return buffer >> data.serverName >> data.playerCount >> data.sizeX >>
 		       data.sizeY >> data.gameLength >> data.explosionRadius >>
-		       data.bombTimer >> data.players >> bEnd;
+		       data.bombTimer >> data.players >> Buffer::eEnd;
 	case DrawMessageEnum::Game:
 		return buffer >> data.serverName >> data.sizeX >> data.sizeY >>
 		       data.gameLength >> data.turn >> data.players >>
 		       data.playerPositions >> data.blocks >> data.bombs >>
-		       data.explosions >> data.scores >> bEnd;
+		       data.explosions >> data.scores >> Buffer::eEnd;
 	default:
 		return buffer;
 	}
@@ -595,14 +573,14 @@ Buffer & operator<<(Buffer & buffer, const DataInputMessage & data) {
 	buffer.writeU8(static_cast<uint8_t>(data.type));
 	switch (data.type) {
 	case InputMessageEnum::Move:
-		return buffer << data.direction << bSend;
+		return buffer << data.direction << Buffer::eSend;
 	default:
-		return buffer << bSend;
+		return buffer << Buffer::eSend;
 	}
 }
 
 Buffer & operator>>(Buffer & buffer, DataInputMessage & data) {
-	buffer >> bReceive;
+	buffer >> Buffer::eReceive;
 	uint8_t enumValue = buffer.readU8();
 	if (enumValue > 2) {
 		throw BadType();
@@ -610,8 +588,8 @@ Buffer & operator>>(Buffer & buffer, DataInputMessage & data) {
 	data.type = static_cast<InputMessageEnum>(enumValue);
 	switch (data.type) {
 	case InputMessageEnum::Move:
-		return buffer >> data.direction >> bEnd;
+		return buffer >> data.direction >> Buffer::eEnd;
 	default:
-		return buffer >> bEnd;
+		return buffer >> Buffer::eEnd;
 	}
 }

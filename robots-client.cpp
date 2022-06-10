@@ -7,6 +7,7 @@
 #include <unordered_map>
 
 #include "buffer.h"
+#include "exceptions.h"
 #include "messages.h"
 #include "options.h"
 #include "utils.h"
@@ -16,37 +17,6 @@ using namespace boost::asio::ip;
 using namespace boost::program_options;
 
 namespace {
-	variables_map handleOptions(int argc, char ** argv) {
-		variables_map options;
-		/* Parse options. Check argument validity. */
-		try {
-			options = parseOptions(argc, argv, getClientOptionsDescription());
-		} catch (std::exception & e) {
-			throw UnrecoverableException(
-			    "Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) +
-			    " --help for usage.\n"
-			);
-		}
-
-		/* Print help message if requested. */
-		if (options.count("help")) {
-			throw NeedHelp();
-		}
-
-		/* Finalize parsing, prepare argument values, including checking the
-		 * existence of required arguments. */
-		try {
-			notifyOptions(options);
-		} catch (std::exception & e) {
-			throw UnrecoverableException(
-			    "Error: " + std::string(e.what()) + "\nRun " + std::string(argv[0]) +
-			    " --help for usage.\n"
-			);
-		}
-
-		return options;
-	}
-
 	/* Thread exception handling. */
 	std::exception_ptr exceptionPtr = nullptr;
 	std::mutex exceptionMutex;
@@ -54,8 +24,8 @@ namespace {
 
 	void handleInterrupt([[maybe_unused]] int signal) {
 		try {
-			throw UnrecoverableException("\nInterrupted.\n");
-		} catch (UnrecoverableException & e) {
+			throw InterruptedException();
+		} catch (InterruptedException & e) {
 			{
 				std::lock_guard<std::mutex> guard(exceptionMutex);
 				exceptionPtr = std::current_exception();
@@ -64,123 +34,97 @@ namespace {
 		}
 	}
 
-	enum class GameState {
-		Lobby,
-		Game
-	};
-
-	class ClientVariables {
+	class Client {
 	public:
 		/* Communication related variables. */
-		io_context clientContext{};
+		io_context context;
 
 		variables_map options;
 
-		udp::resolver UDPResolver{clientContext};
-		tcp::resolver TCPResolver{clientContext};
-		udp::endpoint GUIEndpoint{};
-		tcp::endpoint serverEndpoint{};
-		udp::socket GUISocket{clientContext};
-		tcp::socket serverSocket{clientContext};
+		udp::resolver UDPResolver;
+		tcp::resolver TCPResolver;
+		udp::endpoint GUIEndpoint;
+		tcp::endpoint serverEndpoint;
+		udp::socket GUISocket;
+		tcp::socket serverSocket;
 
 		/* Protection mostly for reading and writing to `state` member variable. */
 		std::mutex variablesMutex;
-		GameState state{GameState::Lobby};
+		GameState state;
 		std::string playerName;
 
-		ClientVariables(int argc, char ** argv) {
-			options = handleOptions(argc, argv);
-			playerName = options["player-name"].as<std::string>();
-			GUIEndpoint = resolveAddress<udp::endpoint, udp::resolver>(
-			    UDPResolver, options["gui-address"].as<std::string>(),
-			    std::string(argv[0])
-			);
-			serverEndpoint = resolveAddress<tcp::endpoint, tcp::resolver>(
-			    TCPResolver, options["server-address"].as<std::string>(),
-			    std::string(argv[0])
-			);
-			GUISocket = udp::socket(
-			    clientContext, udp::endpoint(udp::v6(), options["port"].as<port_t>())
-			);
+		Client(int argc, char ** argv) :
+		    context(),
+		    options(handleOptions(argc, argv, getClientOptionsDescription())),
+		    UDPResolver(context), TCPResolver(context),
+		    GUIEndpoint(resolveAddress<udp::endpoint, udp::resolver>(
+		        UDPResolver, options["gui-address"].as<std::string>(),
+		        std::string(argv[0])
+		    )),
+		    serverEndpoint(resolveAddress<tcp::endpoint, tcp::resolver>(
+		        TCPResolver, options["server-address"].as<std::string>(),
+		        std::string(argv[0])
+		    )),
+		    GUISocket(udp::socket(
+		        context, udp::endpoint(udp::v6(), options["port"].as<port_t>())
+		    )),
+		    serverSocket(context), state(GameState::Lobby),
+		    playerName(options["player-name"].as<std::string>()) {
 			try {
 				serverSocket.connect(serverEndpoint);
+				boost::asio::ip::tcp::no_delay option(true);
+				serverSocket.set_option(option);
 			} catch (std::exception & e) {
-				throw UnrecoverableException("Error: " + std::string(e.what()) + "\n");
+				throw RobotsException("Error: " + std::string(e.what()) + "\n");
 			}
 		}
-	};
 
-	const DataClientMessage & processInputMessage(
-	    const ClientVariables & variables, const DataInputMessage & inMessage
-	) {
-		static DataClientMessage outMessage;
-		if (variables.state == GameState::Lobby) {
-			/* If GameStarted message not received, send Join. */
-			outMessage.type = ClientMessageEnum::Join;
-			outMessage.name.value = variables.playerName;
-		} else {
-			/* Otherwise, just forward the message, pretty much. */
-			switch (inMessage.type) {
-			case InputMessageEnum::PlaceBomb:
-				outMessage.type = ClientMessageEnum::PlaceBomb;
-				break;
-			case InputMessageEnum::PlaceBlock:
-				outMessage.type = ClientMessageEnum::PlaceBlock;
-				break;
-			case InputMessageEnum::Move:
-				outMessage.type = ClientMessageEnum::Move;
-				outMessage.direction = inMessage.direction;
-				break;
-			default:
-				break;
+	private:
+		DataClientMessage outClientMessage;
+
+	public:
+		const DataClientMessage &
+		processInputMessage(const DataInputMessage & inMessage) {
+			if (state == GameState::Lobby) {
+				/* If GameStarted message not received, send Join. */
+				outClientMessage.type = ClientMessageEnum::Join;
+				outClientMessage.name.value = playerName;
+			} else {
+				/* Otherwise, just forward the message, pretty much. */
+				switch (inMessage.type) {
+				case InputMessageEnum::PlaceBomb:
+					outClientMessage.type = ClientMessageEnum::PlaceBomb;
+					break;
+				case InputMessageEnum::PlaceBlock:
+					outClientMessage.type = ClientMessageEnum::PlaceBlock;
+					break;
+				case InputMessageEnum::Move:
+					outClientMessage.type = ClientMessageEnum::Move;
+					outClientMessage.direction = inMessage.direction;
+					break;
+				default:
+					break;
+				}
 			}
+			return outClientMessage;
 		}
-		return outMessage;
-	}
 
-	const DataDrawMessage & processServerMessage(
-	    ClientVariables & variables, const DataServerMessage & inMessage
-	) {
-		static DataDrawMessage outMessage;
-		static std::unordered_map<uint32_t, DataBomb> activeBombs;
+	private:
+		DataDrawMessage outDrawMessage;
+
+		std::unordered_map<uint32_t, DataBomb> activeBombs;
 		std::set<uint8_t> destroyedPlayers;
 		std::set<DataPosition> destroyedBlocks;
 
-		switch (inMessage.type) {
-		case ServerMessageEnum::Hello:
-			outMessage.serverName = inMessage.serverName;
-			outMessage.playerCount = inMessage.playerCount;
-			outMessage.sizeX = inMessage.sizeX;
-			outMessage.sizeY = inMessage.sizeY;
-			outMessage.gameLength = inMessage.gameLength;
-			outMessage.explosionRadius = inMessage.explosionRadius;
-			outMessage.bombTimer = inMessage.bombTimer;
-			break;
-		case ServerMessageEnum::AcceptedPlayer:
-			outMessage.players.map.insert({inMessage.playerID, inMessage.player});
-			outMessage.scores.map.insert({inMessage.playerID, {0}});
-			break;
-		case ServerMessageEnum::GameStarted:
-			variables.state = GameState::Game;
-			outMessage.type = DrawMessageEnum::Game;
-			outMessage.players = inMessage.players;
-			outMessage.playerPositions.map.clear();
-			outMessage.blocks.set.clear();
-			outMessage.scores.map.clear();
-			for (auto & player : outMessage.players.map) {
-				outMessage.scores.map[player.first] = {0};
-			}
-
-			break;
-		case ServerMessageEnum::Turn:
+		void processTurnMessage(const DataServerMessage & inMessage) {
 			/* First, decrease counters on bombs and forget previous explosions. */
 			for (auto & entry : activeBombs) {
 				entry.second.timer.value--;
 			}
-			outMessage.explosions.set.clear();
+			outDrawMessage.explosions.set.clear();
 
 			/* Then, process the events. */
-			outMessage.turn = inMessage.turn;
+			outDrawMessage.turn = inMessage.turn;
 			for (const DataEvent & event : inMessage.events.list) {
 				DataBomb bomb;
 				DataPosition bombPosition;
@@ -194,41 +138,41 @@ namespace {
 				case EventEnum::BombExploded:
 					/* Get explosion bounds. */
 					bombPosition = activeBombs[event.bombID.value].position;
-					radius = outMessage.explosionRadius.value;
+					radius = outDrawMessage.explosionRadius.value;
 					leftX = uint16_t(std::max(0, bombPosition.x.value - radius));
 					rightX = uint16_t(std::min(
-					    outMessage.sizeX.value - 1, bombPosition.x.value + radius
+					    outDrawMessage.sizeX.value - 1, bombPosition.x.value + radius
 					));
 					lowY = uint16_t(std::max(0, bombPosition.y.value - radius));
 					highY = uint16_t(std::min(
-					    outMessage.sizeY.value - 1, bombPosition.y.value + radius
+					    outDrawMessage.sizeY.value - 1, bombPosition.y.value + radius
 					));
 					/* Add explosions. */
 					for (int x = bombPosition.x.value; x >= int(leftX); x--) {
 						DataPosition explosion = {{uint16_t(x)}, bombPosition.y};
-						outMessage.explosions.set.insert(explosion);
-						if (outMessage.blocks.set.contains(explosion)) {
+						outDrawMessage.explosions.set.insert(explosion);
+						if (outDrawMessage.blocks.set.contains(explosion)) {
 							break;
 						}
 					}
 					for (int x = bombPosition.x.value; x <= int(rightX); x++) {
 						DataPosition explosion = {{uint16_t(x)}, bombPosition.y};
-						outMessage.explosions.set.insert(explosion);
-						if (outMessage.blocks.set.contains(explosion)) {
+						outDrawMessage.explosions.set.insert(explosion);
+						if (outDrawMessage.blocks.set.contains(explosion)) {
 							break;
 						}
 					}
 					for (int y = bombPosition.y.value; y >= int(lowY); y--) {
 						DataPosition explosion = {bombPosition.x, {uint16_t(y)}};
-						outMessage.explosions.set.insert(explosion);
-						if (outMessage.blocks.set.contains(explosion)) {
+						outDrawMessage.explosions.set.insert(explosion);
+						if (outDrawMessage.blocks.set.contains(explosion)) {
 							break;
 						}
 					}
 					for (int y = bombPosition.y.value; y <= int(highY); y++) {
 						DataPosition explosion = {bombPosition.x, {uint16_t(y)}};
-						outMessage.explosions.set.insert(explosion);
-						if (outMessage.blocks.set.contains(explosion)) {
+						outDrawMessage.explosions.set.insert(explosion);
+						if (outDrawMessage.blocks.set.contains(explosion)) {
 							break;
 						}
 					}
@@ -244,10 +188,10 @@ namespace {
 					}
 					break;
 				case EventEnum::PlayerMoved:
-					outMessage.playerPositions.map[event.playerID] = event.position;
+					outDrawMessage.playerPositions.map[event.playerID] = event.position;
 					break;
 				case EventEnum::BlockPlaced:
-					outMessage.blocks.set.insert(event.position);
+					outDrawMessage.blocks.set.insert(event.position);
 					break;
 				default:
 					break;
@@ -255,35 +199,72 @@ namespace {
 			}
 
 			/* Finally, copy new values to the list of bombs. */
-			outMessage.bombs.list.clear();
+			outDrawMessage.bombs.list.clear();
 			for (auto & entry : activeBombs) {
-				outMessage.bombs.list.push_back(entry.second);
+				outDrawMessage.bombs.list.push_back(entry.second);
 			}
 			/* Update scores and blocks */
 			for (uint8_t playerID : destroyedPlayers) {
-				outMessage.scores.map[{playerID}].value++;
+				outDrawMessage.scores.map[{playerID}].value++;
 			}
 			for (const DataPosition & block : destroyedBlocks) {
-				outMessage.blocks.set.erase(block);
+				outDrawMessage.blocks.set.erase(block);
 			}
-			break;
-		case ServerMessageEnum::GameEnded:
-			variables.state = GameState::Lobby;
-			activeBombs.clear();
-			outMessage.type = DrawMessageEnum::Lobby;
-			outMessage.playerPositions.map.clear();
-			outMessage.blocks.set.clear();
-			outMessage.bombs.list.clear();
-			outMessage.scores = inMessage.scores;
-			break;
-		default:
-			break;
 		}
 
-		return outMessage;
-	}
+	public:
+		const DataDrawMessage &
+		processServerMessage(const DataServerMessage & inMessage) {
+			destroyedPlayers.clear();
+			destroyedBlocks.clear();
 
-	void listenToGUI(ClientVariables & variables) {
+			switch (inMessage.type) {
+			case ServerMessageEnum::Hello:
+				outDrawMessage.serverName = inMessage.serverName;
+				outDrawMessage.playerCount = inMessage.playerCount;
+				outDrawMessage.sizeX = inMessage.sizeX;
+				outDrawMessage.sizeY = inMessage.sizeY;
+				outDrawMessage.gameLength = inMessage.gameLength;
+				outDrawMessage.explosionRadius = inMessage.explosionRadius;
+				outDrawMessage.bombTimer = inMessage.bombTimer;
+				break;
+			case ServerMessageEnum::AcceptedPlayer:
+				outDrawMessage.players.map.insert({inMessage.playerID, inMessage.player}
+				);
+				outDrawMessage.scores.map.insert({inMessage.playerID, {0}});
+				break;
+			case ServerMessageEnum::GameStarted:
+				state = GameState::Game;
+				outDrawMessage.type = DrawMessageEnum::Game;
+				outDrawMessage.players = inMessage.players;
+				outDrawMessage.playerPositions.map.clear();
+				outDrawMessage.blocks.set.clear();
+				outDrawMessage.scores.map.clear();
+				for (auto & player : outDrawMessage.players.map) {
+					outDrawMessage.scores.map[player.first] = {0};
+				}
+				break;
+			case ServerMessageEnum::Turn:
+				processTurnMessage(inMessage);
+				break;
+			case ServerMessageEnum::GameEnded:
+				state = GameState::Lobby;
+				activeBombs.clear();
+				outDrawMessage.type = DrawMessageEnum::Lobby;
+				outDrawMessage.playerPositions.map.clear();
+				outDrawMessage.blocks.set.clear();
+				outDrawMessage.bombs.list.clear();
+				outDrawMessage.scores = inMessage.scores;
+				break;
+			default:
+				break;
+			}
+
+			return outDrawMessage;
+		}
+	};
+
+	void listenToGUI(Client & variables) {
 		try {
 			UDPBuffer GUIBufferIn(variables.GUISocket, variables.GUIEndpoint);
 			TCPBuffer serverBufferOut(variables.serverSocket);
@@ -299,7 +280,7 @@ namespace {
 				}
 
 				std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
-				serverBufferOut << processInputMessage(variables, inMessage);
+				serverBufferOut << variables.processInputMessage(inMessage);
 			}
 		} catch (std::exception & e) {
 			{
@@ -310,7 +291,7 @@ namespace {
 		}
 	}
 
-	void listenToServer(ClientVariables & variables) {
+	void listenToServer(Client & variables) {
 		try {
 			TCPBuffer serverBufferIn(variables.serverSocket);
 			UDPBuffer GUIBufferOut(variables.GUISocket, variables.GUIEndpoint);
@@ -321,7 +302,7 @@ namespace {
 
 				std::lock_guard<std::mutex> lockGuard(variables.variablesMutex);
 				const DataDrawMessage & outMessage =
-				    processServerMessage(variables, inMessage);
+				    variables.processServerMessage(inMessage);
 				if (inMessage.type != ServerMessageEnum::GameStarted) {
 					GUIBufferOut << outMessage;
 				}
@@ -337,22 +318,27 @@ namespace {
 } // namespace
 
 int main(int argc, char ** argv) {
-	std::shared_ptr<ClientVariables> variables;
+	std::shared_ptr<Client> variables;
 	try {
-		variables = std::make_shared<ClientVariables>(argc, argv);
+		variables = std::make_shared<Client>(argc, argv);
 	} catch (NeedHelp & e) {
 		/* Exception reserved for --help option. */
 		std::cout << getClientOptionsDescription();
 		return 0;
-	} catch (UnrecoverableException & e) {
+	} catch (RobotsException & e) {
 		/* Something went wrong, we know what it is and cannot recover from it, but
 		 * do not have to halt the other threads, because there are no threads. */
 		std::cerr << e.what();
 		return 1;
+	} catch (std::exception & e) {
+		/* Something went wrong, probably with initializing sockets, like occupied
+		 * port. No biggie, just end here. */
+		std::cerr << e.what() << "\n";
+		return 1;
 	}
 
 	/* Install SIGINT handler, prepare options, endpoints, sockets, buffers,
-	 * and message queues. Save all to a ClientVariables class. */
+	 * and message queues. Save all to a Client class. */
 	installSignalHandler(SIGINT, handleInterrupt, SA_RESTART);
 
 	std::stringstream connectionsInfo;
@@ -381,17 +367,17 @@ int main(int argc, char ** argv) {
 		/* We notify the other threads that the program cannot continue running, and
 		 * collect all resources to avoid memory leaks. */
 
-	} catch (UnrecoverableException & e) {
+	} catch (RobotsException & e) {
 		/* Something went wrong, we know what it is and cannot recover from it.
 		 * Close the other threads by forcing exceptions in them. */
 		try {
 			variables->GUISocket.shutdown(udp::socket::shutdown_both);
-		} catch (boost::wrapexcept<boost::system::system_error> & f) {
+		} catch (std::exception & f) {
 			// OK
 		}
 		try {
 			variables->serverSocket.shutdown(tcp::socket::shutdown_both);
-		} catch (boost::wrapexcept<boost::system::system_error> & f) {
+		} catch (std::exception & f) {
 			// OK
 		}
 		variables->GUISocket.close();

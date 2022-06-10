@@ -3,12 +3,12 @@
 #include <exception>
 #include <utility>
 
-class UnrecoverableException : public std::exception {
+class RobotsException : public std::exception {
 private:
 	std::string message;
 
 public:
-	explicit UnrecoverableException(std::string newMessage) :
+	explicit RobotsException(std::string newMessage) :
 	    message(std::move(newMessage)) {
 	}
 
@@ -18,33 +18,38 @@ public:
 };
 
 /* Exception thrown when parsing a variant message type goes wrong. */
-class BadType : public UnrecoverableException {
+class BadType : public RobotsException {
 public:
-	BadType() :
-	    UnrecoverableException("Error: message type resolution failed.\n") {
+	BadType() : RobotsException("Error: message type resolution failed.\n") {
 	}
 };
 
 /* Exception thrown when writing exceeds buffer capacity. */
-class BadWrite : public UnrecoverableException {
+class BadWrite : public RobotsException {
 public:
 	BadWrite() :
-	    UnrecoverableException("Error: not enough buffer space to write to.\n") {
+	    RobotsException("Error: not enough buffer space to write to.\n") {
 	}
 };
 
 /* Exception thrown when writing exceeds buffer capacity. */
-class BadRead : public UnrecoverableException {
+class BadRead : public RobotsException {
 public:
 	BadRead() :
-	    UnrecoverableException("Error: not enough buffered list to read from.\n"
-	    ) {
+	    RobotsException("Error: not enough buffered list to read from.\n") {
 	}
 };
 
 /* Exception thrown when user requests help message. */
-class NeedHelp : public std::exception {
-	[[nodiscard]] const char * what() const noexcept override {
-		return "Info: user requested for help message.\n";
+class NeedHelp : public RobotsException {
+public:
+	NeedHelp() : RobotsException("Info: user requested for help message.\n") {
+	}
+};
+
+/* Exception thrown when program receives SIGINT. */
+class InterruptedException : public RobotsException {
+public:
+	InterruptedException() : RobotsException("\nInterrupted.\n") {
 	}
 };

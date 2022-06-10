@@ -21,12 +21,6 @@ class BufferEncourageSend {};
 
 class BufferEnsureEnd {};
 
-BufferEncourageReceive bReceive;
-
-BufferEncourageSend bSend;
-
-BufferEnsureEnd bEnd;
-
 /*
  * =============================================================================
  *                                  Buffer
@@ -152,6 +146,10 @@ public:
 	virtual ~Buffer() {
 		delete[] buffer;
 	}
+
+	[[maybe_unused]] static BufferEncourageReceive eReceive;
+	[[maybe_unused]] static BufferEncourageSend eSend;
+	[[maybe_unused]] static BufferEnsureEnd eEnd;
 };
 
 /* Wrapper for a buffer associated with a UDP connection. */
