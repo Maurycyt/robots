@@ -251,6 +251,7 @@ namespace {
 				state = GameState::Lobby;
 				activeBombs.clear();
 				outDrawMessage.type = DrawMessageEnum::Lobby;
+				outDrawMessage.players.map.clear();
 				outDrawMessage.playerPositions.map.clear();
 				outDrawMessage.blocks.set.clear();
 				outDrawMessage.bombs.list.clear();
